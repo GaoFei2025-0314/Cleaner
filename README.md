@@ -26,4 +26,52 @@ V0.1 is the safe baseline:
 
 ## Current Status
 
-The V0.1 spec and implementation plans are drafted and repaired after review. App implementation has not started yet.
+V0.1 implementation is in progress on branch `v0.1-implementation`.
+
+## Development
+
+Install dependencies:
+
+```powershell
+npm install
+```
+
+Run frontend tests:
+
+```powershell
+npm test
+```
+
+Run frontend production build:
+
+```powershell
+npm run build
+```
+
+Run Rust tests:
+
+```powershell
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+Run browser preview with mock data:
+
+```powershell
+npm run dev
+```
+
+Run Tauri desktop app:
+
+```powershell
+npm run tauri:dev
+```
+
+Build installer:
+
+```powershell
+npm run tauri:build
+```
+
+## Safety Boundary
+
+The frontend must not construct cleanup paths or decide filesystem safety. It can only display backend scan results and submit selected item IDs. Rust backend modules own rule resolution, path allowlist checks, configuration reference checks, process usage checks, and deletion execution.
