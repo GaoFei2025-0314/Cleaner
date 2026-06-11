@@ -1,3 +1,4 @@
+pub mod config_refs;
 pub mod drive;
 pub mod errors;
 pub mod fixtures;
