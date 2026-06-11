@@ -24,3 +24,6 @@ thiserror = "2.0"
 sysinfo = "0.33"
 walkdir = "2.5"
 time = { version = "0.3", features = ["formatting"] }
+
+[dev-dependencies]
+tempfile = "3.14"

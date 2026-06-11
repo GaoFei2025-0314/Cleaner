@@ -1,6 +1,10 @@
+pub mod drive;
+pub mod errors;
 pub mod fixtures;
 pub mod models;
+pub mod paths;
 pub mod rules;
+pub mod size;
 
 #[tauri::command]
 fn ping() -> &'static str {
