@@ -4,6 +4,7 @@ pub mod errors;
 pub mod fixtures;
 pub mod models;
 pub mod paths;
+pub mod processes;
 pub mod rules;
 pub mod size;
 
