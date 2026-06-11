@@ -32,6 +32,9 @@ export default function App() {
   const [result, setResult] = useState<CleanupResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [failedAction, setFailedAction] = useState<FailedAction | null>(null);
+  const [analyticsEnabled, setAnalyticsEnabled] = useState(
+    () => localStorage.getItem("analyticsEnabled") !== "false",
+  );
 
   async function startScan() {
     setErrorMessage(null);
@@ -89,6 +92,11 @@ export default function App() {
     }
   }
 
+  function updateAnalyticsEnabled(enabled: boolean) {
+    setAnalyticsEnabled(enabled);
+    localStorage.setItem("analyticsEnabled", String(enabled));
+  }
+
   return (
     <AppShell currentStep={stepIndex[step]} report={report}>
       {errorMessage && (
@@ -101,7 +109,13 @@ export default function App() {
           onRetry={retryFailedAction}
         />
       )}
-      {step === "welcome" && <WelcomeStep onStart={() => void startScan()} />}
+      {step === "welcome" && (
+        <WelcomeStep
+          analyticsEnabled={analyticsEnabled}
+          onAnalyticsEnabledChange={updateAnalyticsEnabled}
+          onStart={() => void startScan()}
+        />
+      )}
       {step === "scan" && <ScanStep />}
       {step === "suggestions" && report && (
         <SuggestionsStep

@@ -1,6 +1,15 @@
 import { ScanSearch } from "lucide-react";
+import { PrivacyNotice } from "./PrivacyNotice";
 
-export function WelcomeStep({ onStart }: { onStart: () => void }) {
+export function WelcomeStep({
+  onStart,
+  analyticsEnabled,
+  onAnalyticsEnabledChange,
+}: {
+  onStart: () => void;
+  analyticsEnabled: boolean;
+  onAnalyticsEnabledChange: (enabled: boolean) => void;
+}) {
   return (
     <div className="step-content welcome-panel">
       <p className="eyebrow">开始前</p>
@@ -11,6 +20,7 @@ export function WelcomeStep({ onStart }: { onStart: () => void }) {
         <div>高风险项目需要二次确认</div>
         <div>被配置引用的目录不会清理</div>
       </div>
+      <PrivacyNotice enabled={analyticsEnabled} onEnabledChange={onAnalyticsEnabledChange} />
       <button className="primary-button" onClick={onStart}>
         <ScanSearch size={18} />
         开始扫描 C 盘

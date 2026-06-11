@@ -1,3 +1,4 @@
+pub mod analytics;
 pub mod cleanup;
 pub mod config_refs;
 pub mod drive;
