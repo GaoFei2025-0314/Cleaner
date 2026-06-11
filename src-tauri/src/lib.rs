@@ -6,16 +6,27 @@ pub mod models;
 pub mod paths;
 pub mod processes;
 pub mod rules;
+pub mod scan;
 pub mod size;
+
+use models::ScanReport;
+use paths::ScanRoots;
 
 #[tauri::command]
 fn ping() -> &'static str {
     "ok"
 }
 
+#[tauri::command]
+fn scan_c_drive() -> Result<ScanReport, String> {
+    let roots = ScanRoots::from_current_user().map_err(|error| error.to_string())?;
+    let drive_summary = drive::c_drive_summary().map_err(|error| error.to_string())?;
+    Ok(scan::scan_with_roots(&roots, drive_summary))
+}
+
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![ping])
+        .invoke_handler(tauri::generate_handler![ping, scan_c_drive])
         .run(tauri::generate_context!())
         .expect("failed to run C Drive Cleaner");
 }
