@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 
 use c_drive_cleaner::v2::duplicate::{
     apply_duplicate_recommendations, scan_duplicate_files,
@@ -6,6 +7,9 @@ use c_drive_cleaner::v2::duplicate::{
 };
 use c_drive_cleaner::v2::models::{
     DuplicateFileType, DuplicateRecommendedAction, DuplicateScanRequest,
+};
+use c_drive_cleaner::v2::path_safety::{
+    is_protected_duplicate_path, should_skip_scan_location,
 };
 
 #[test]
@@ -122,4 +126,16 @@ fn protected_duplicate_files_are_reported_but_not_auto_selected() {
         protected_file.recommended_action,
         DuplicateRecommendedAction::Clean
     );
+}
+
+#[test]
+fn built_in_protected_paths_are_marked_protected_but_not_hidden_from_scan() {
+    assert!(is_protected_duplicate_path(
+        Path::new(r"C:\Windows\Temp\x.txt"),
+        &[]
+    ));
+    assert!(!should_skip_scan_location(
+        Path::new(r"C:\Windows"),
+        &[]
+    ));
 }
