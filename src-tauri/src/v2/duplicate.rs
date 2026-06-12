@@ -109,7 +109,9 @@ impl DuplicateEntryRegistry {
 }
 
 pub fn scan_duplicate_files(request: DuplicateScanRequest) -> Result<DuplicateScanReport, String> {
-    scan_duplicate_files_internal(request, |_| {}, None).map(|outcome| outcome.report)
+    let mut progress = |_| {};
+    scan_duplicate_files_internal(request, |_| {}, None, &mut progress, "")
+        .map(|outcome| outcome.report)
 }
 
 #[doc(hidden)]
@@ -120,7 +122,9 @@ pub fn scan_duplicate_files_with_before_hash_for_test<F>(
 where
     F: FnMut(&Path),
 {
-    scan_duplicate_files_internal(request, before_hash, None).map(|outcome| outcome.report)
+    let mut progress = |_| {};
+    scan_duplicate_files_internal(request, before_hash, None, &mut progress, "")
+        .map(|outcome| outcome.report)
 }
 
 #[doc(hidden)]
@@ -132,16 +136,33 @@ pub fn scan_duplicate_files_cancellable_for_test<F>(
 where
     F: FnMut(&Path),
 {
-    scan_duplicate_files_internal(request, before_hash, Some(cancelled)).map(|outcome| outcome.report)
+    let mut progress = |_| {};
+    scan_duplicate_files_internal(request, before_hash, Some(cancelled), &mut progress, "")
+        .map(|outcome| outcome.report)
 }
 
-fn scan_duplicate_files_internal<F>(
+#[doc(hidden)]
+pub fn scan_duplicate_files_with_progress_for_test<P>(
+    request: DuplicateScanRequest,
+    mut progress: P,
+) -> Result<DuplicateScanReport, String>
+where
+    P: FnMut(OperationProgressPayload),
+{
+    scan_duplicate_files_internal(request, |_| {}, None, &mut progress, "test")
+        .map(|outcome| outcome.report)
+}
+
+fn scan_duplicate_files_internal<F, P>(
     request: DuplicateScanRequest,
     mut before_hash: F,
     cancelled: Option<&AtomicBool>,
+    progress: &mut P,
+    operation_id: &str,
 ) -> Result<DuplicateScanOutcome, String>
 where
     F: FnMut(&Path),
+    P: FnMut(OperationProgressPayload),
 {
     let scan_roots = scan_roots(&request);
     let allowed_extensions = allowed_extensions(&request.file_types, &request.custom_extensions);
@@ -222,6 +243,17 @@ where
                 protected: is_protected_duplicate_path(path, &request.protected_paths),
                 normalized_stem: normalized_stem(path),
             };
+            emit_scan_progress(
+                progress,
+                operation_id,
+                "scanning",
+                scan_progress_percent(scanned_files, 10),
+                candidate.visible_location_hint.clone(),
+                scanned_files,
+                0,
+                0,
+                0,
+            );
             candidates_by_size
                 .entry(size_bytes)
                 .or_default()
@@ -230,7 +262,14 @@ where
     }
 
     let (mut strict_groups, skipped_hashes, backend_entries) =
-        strict_duplicate_groups(&candidates_by_size, &mut before_hash, cancelled)?;
+        strict_duplicate_groups(
+            &candidates_by_size,
+            &mut before_hash,
+            cancelled,
+            progress,
+            operation_id,
+            scanned_files,
+        )?;
     skipped_locations += skipped_hashes;
     for group in &mut strict_groups {
         apply_duplicate_recommendations(group, &request.protected_paths);
@@ -304,7 +343,18 @@ pub fn run_duplicate_cleanup_with_recycle_bin(
     registry: &DuplicateEntryRegistry,
     recycle_bin: &impl RecycleBin,
 ) -> DuplicateCleanupReport {
-    run_duplicate_cleanup_internal(request, registry, recycle_bin, &[], None, |_| {})
+    let mut progress = |_| {};
+    run_duplicate_cleanup_internal(
+        request,
+        registry,
+        recycle_bin,
+        &[],
+        None,
+        |_| {},
+        |_| {},
+        &mut progress,
+        "",
+    )
         .unwrap_or_else(|report| report)
 }
 
@@ -320,6 +370,7 @@ pub fn run_duplicate_cleanup_cancellable_for_test<F>(
 where
     F: FnMut(&Path),
 {
+    let mut progress = |_| {};
     run_duplicate_cleanup_internal(
         request,
         registry,
@@ -327,18 +378,78 @@ where
         backend_protected_paths,
         Some(cancelled),
         before_selected_fingerprint,
+        |_| {},
+        &mut progress,
+        "test",
     )
     .map_err(|_| "操作已取消".to_string())
 }
 
-fn run_duplicate_cleanup_internal(
+#[doc(hidden)]
+pub fn run_duplicate_cleanup_cancellable_before_recycle_for_test<F>(
+    request: DuplicateCleanupRequest,
+    registry: &DuplicateEntryRegistry,
+    recycle_bin: &impl RecycleBin,
+    cancelled: &AtomicBool,
+    backend_protected_paths: &[String],
+    before_recycle: F,
+) -> Result<DuplicateCleanupReport, String>
+where
+    F: FnMut(&Path),
+{
+    let mut progress = |_| {};
+    run_duplicate_cleanup_internal(
+        request,
+        registry,
+        recycle_bin,
+        backend_protected_paths,
+        Some(cancelled),
+        |_| {},
+        before_recycle,
+        &mut progress,
+        "test",
+    )
+    .map_err(|_| "操作已取消".to_string())
+}
+
+#[doc(hidden)]
+pub fn run_duplicate_cleanup_with_progress_for_test<P>(
+    request: DuplicateCleanupRequest,
+    registry: &DuplicateEntryRegistry,
+    recycle_bin: &impl RecycleBin,
+    mut progress: P,
+) -> DuplicateCleanupReport
+where
+    P: FnMut(OperationProgressPayload),
+{
+    run_duplicate_cleanup_internal(
+        request,
+        registry,
+        recycle_bin,
+        &[],
+        None,
+        |_| {},
+        |_| {},
+        &mut progress,
+        "test",
+    )
+    .unwrap_or_else(|report| report)
+}
+
+fn run_duplicate_cleanup_internal<P>(
     request: DuplicateCleanupRequest,
     registry: &DuplicateEntryRegistry,
     recycle_bin: &impl RecycleBin,
     backend_protected_paths: &[String],
     cancelled: Option<&AtomicBool>,
     mut before_selected_fingerprint: impl FnMut(&Path),
-) -> Result<DuplicateCleanupReport, DuplicateCleanupReport> {
+    mut before_recycle: impl FnMut(&Path),
+    progress: &mut P,
+    operation_id: &str,
+) -> Result<DuplicateCleanupReport, DuplicateCleanupReport>
+where
+    P: FnMut(OperationProgressPayload),
+{
     let protected_override_confirmed = request.protected_override_confirmed;
     let mut report = DuplicateCleanupReport {
         processed_files: 0,
@@ -349,6 +460,12 @@ fn run_duplicate_cleanup_internal(
         c_drive_freed_bytes: 0,
         other_drive_freed_bytes: 0,
     };
+    let total_selected = request
+        .groups
+        .iter()
+        .flat_map(|group| &group.files)
+        .filter(|file| file.selected)
+        .count() as u64;
 
     for group in request.groups {
         if check_cancelled(cancelled).is_err() {
@@ -387,6 +504,16 @@ fn run_duplicate_cleanup_internal(
         }
         if retained.is_empty() {
             report.skipped_count += selected.len() as u64;
+            emit_cleanup_progress(
+                progress,
+                operation_id,
+                &report,
+                total_selected,
+                selected
+                    .first()
+                    .map(|file| visible_location_hint(&file.entry.path))
+                    .unwrap_or_default(),
+            );
             continue;
         }
 
@@ -407,6 +534,13 @@ fn run_duplicate_cleanup_internal(
             let path = &file.entry.path;
             if !path.exists() {
                 report.failed_count += 1;
+                emit_cleanup_progress(
+                    progress,
+                    operation_id,
+                    &report,
+                    total_selected,
+                    visible_location_hint(path),
+                );
                 continue;
             }
             if retained_ids.contains(&file.entry.entry_id)
@@ -414,6 +548,13 @@ fn run_duplicate_cleanup_internal(
                 || !selected_path_keys.insert(file.entry.path_key.clone())
             {
                 report.skipped_count += 1;
+                emit_cleanup_progress(
+                    progress,
+                    operation_id,
+                    &report,
+                    total_selected,
+                    visible_location_hint(path),
+                );
                 continue;
             }
             if (file.request_protected
@@ -422,6 +563,13 @@ fn run_duplicate_cleanup_internal(
                 && !protected_override_confirmed
             {
                 report.skipped_count += 1;
+                emit_cleanup_progress(
+                    progress,
+                    operation_id,
+                    &report,
+                    total_selected,
+                    visible_location_hint(path),
+                );
                 continue;
             }
 
@@ -431,6 +579,13 @@ fn run_duplicate_cleanup_internal(
                 Err(_) if cancellation_requested(cancelled) => return Err(report),
                 Err(_) => {
                     report.failed_count += 1;
+                    emit_cleanup_progress(
+                        progress,
+                        operation_id,
+                        &report,
+                        total_selected,
+                        visible_location_hint(path),
+                    );
                     continue;
                 }
             };
@@ -448,9 +603,20 @@ fn run_duplicate_cleanup_internal(
                 retained_path_key != &file.entry.path_key && fingerprint == &(size_bytes, hash.clone())
             }) {
                 report.skipped_count += 1;
+                emit_cleanup_progress(
+                    progress,
+                    operation_id,
+                    &report,
+                    total_selected,
+                    visible_location_hint(path),
+                );
                 continue;
             }
 
+            before_recycle(path);
+            if check_cancelled(cancelled).is_err() {
+                return Err(report);
+            }
             match recycle_bin.move_to_recycle_bin(path) {
                 Ok(()) => {
                     report.success_count += 1;
@@ -463,6 +629,13 @@ fn run_duplicate_cleanup_internal(
                 }
                 Err(_) => report.failed_count += 1,
             }
+            emit_cleanup_progress(
+                progress,
+                operation_id,
+                &report,
+                total_selected,
+                visible_location_hint(path),
+            );
         }
     }
 
@@ -495,7 +668,16 @@ pub fn start_duplicate_scan(
         let result = if cancelled.load(Ordering::Relaxed) {
             Err("操作已取消".to_string())
         } else {
-            scan_duplicate_files_internal(request, |_| {}, Some(&cancelled))
+            let mut progress = |payload| {
+                emit_progress_payload(&app_handle, payload);
+            };
+            scan_duplicate_files_internal(
+                request,
+                |_| {},
+                Some(&cancelled),
+                &mut progress,
+                &operation_id_for_thread,
+            )
         };
 
         let (status, payload, message) = match result {
@@ -590,6 +772,9 @@ pub fn start_duplicate_cleanup(
                     .unwrap_or_default();
                 let cleanup_result = {
                     let registry = app_handle.state::<DuplicateEntryRegistry>();
+                    let mut progress = |payload| {
+                        emit_progress_payload(&app_handle, payload);
+                    };
                     run_duplicate_cleanup_internal(
                         request,
                         &registry,
@@ -597,6 +782,9 @@ pub fn start_duplicate_cleanup(
                         &backend_protected_paths,
                         Some(&cancelled),
                         |_| {},
+                        |_| {},
+                        &mut progress,
+                        &operation_id_for_thread,
                     )
                 };
                 let cancelled_after_cleanup = cancelled.load(Ordering::Relaxed);
@@ -604,23 +792,25 @@ pub fn start_duplicate_cleanup(
                     Ok(report) | Err(report) => report,
                 };
                 let finished_at = now_rfc3339();
-                let _ = append_history_entry(
-                    &app_handle,
-                    HistoryEntry {
-                        history_id: uuid::Uuid::new_v4().to_string(),
-                        module: OperationModule::DuplicateCleanup,
-                        started_at,
-                        finished_at,
-                        total_bytes: report.freed_bytes,
-                        freed_bytes: report.freed_bytes,
-                        c_drive_freed_bytes: report.c_drive_freed_bytes,
-                        other_drive_freed_bytes: report.other_drive_freed_bytes,
-                        success_count: report.success_count,
-                        skipped_count: report.skipped_count,
-                        failed_count: report.failed_count,
-                        error_categories: cleanup_error_categories(&report),
-                    },
-                );
+                if !cancelled_after_cleanup {
+                    let _ = append_history_entry(
+                        &app_handle,
+                        HistoryEntry {
+                            history_id: uuid::Uuid::new_v4().to_string(),
+                            module: OperationModule::DuplicateCleanup,
+                            started_at,
+                            finished_at,
+                            total_bytes: report.freed_bytes,
+                            freed_bytes: report.freed_bytes,
+                            c_drive_freed_bytes: report.c_drive_freed_bytes,
+                            other_drive_freed_bytes: report.other_drive_freed_bytes,
+                            success_count: report.success_count,
+                            skipped_count: report.skipped_count,
+                            failed_count: report.failed_count,
+                            error_categories: cleanup_error_categories(&report),
+                        },
+                    );
+                }
 
                 emit_progress(
                     &app_handle,
@@ -712,29 +902,49 @@ fn extension_is_allowed(path: &Path, allowed_extensions: &Option<HashSet<String>
     let Some(allowed_extensions) = allowed_extensions else {
         return true;
     };
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| allowed_extensions.contains(&extension.to_ascii_lowercase()))
-        .unwrap_or(false)
+    let Some(file_name) = path.file_name().and_then(|file_name| file_name.to_str()) else {
+        return false;
+    };
+    let file_name = file_name.to_ascii_lowercase();
+    allowed_extensions
+        .iter()
+        .any(|extension| file_name.ends_with(&format!(".{extension}")))
 }
 
-fn strict_duplicate_groups<F>(
+fn strict_duplicate_groups<F, P>(
     candidates_by_size: &BTreeMap<u64, Vec<CandidateFile>>,
     before_hash: &mut F,
     cancelled: Option<&AtomicBool>,
+    progress: &mut P,
+    operation_id: &str,
+    scanned_files: u64,
 ) -> Result<(Vec<DuplicateFileGroup>, u64, Vec<DuplicateBackendEntry>), String>
 where
     F: FnMut(&Path),
+    P: FnMut(OperationProgressPayload),
 {
     let mut groups = Vec::new();
     let mut backend_entries = Vec::new();
     let mut skipped_locations = 0_u64;
+    let mut hashed_files = 0_u64;
 
     for candidates in candidates_by_size.values().filter(|files| files.len() >= 2) {
         let mut by_hash: HashMap<String, Vec<CandidateFile>> = HashMap::new();
         for candidate in candidates {
             check_cancelled(cancelled)?;
             before_hash(&candidate.path);
+            hashed_files += 1;
+            emit_scan_progress(
+                progress,
+                operation_id,
+                "hashing",
+                scan_progress_percent(hashed_files, 60),
+                candidate.visible_location_hint.clone(),
+                scanned_files,
+                groups.len() as u64,
+                groups.iter().map(|group: &DuplicateFileGroup| group.files.len() as u64).sum(),
+                groups.iter().map(|group| group.reclaimable_bytes).sum(),
+            );
             let hash = match hash_file_with_cancel(&candidate.path, cancelled) {
                 Ok(hash) => hash,
                 Err(error) if cancellation_requested(cancelled) => return Err(error),
@@ -774,6 +984,21 @@ where
                 recommended_selection_reason:
                     "Strict duplicates share size and content fingerprint".to_string(),
             });
+            emit_scan_progress(
+                progress,
+                operation_id,
+                "hashing",
+                scan_progress_percent(hashed_files, 70),
+                groups
+                    .last()
+                    .and_then(|group| group.files.first())
+                    .map(|file| file.visible_location_hint.clone())
+                    .unwrap_or_default(),
+                scanned_files,
+                groups.len() as u64,
+                groups.iter().map(|group| group.files.len() as u64).sum(),
+                groups.iter().map(|group| group.total_bytes).sum(),
+            );
         }
     }
 
@@ -987,6 +1212,108 @@ fn cleanup_error_categories(report: &DuplicateCleanupReport) -> Vec<String> {
     categories
 }
 
+fn scan_progress_percent(count: u64, base: u8) -> u8 {
+    let increment = count.min(29) as u8;
+    base.saturating_add(increment).min(99)
+}
+
+fn cleanup_progress_percent(processed_items: u64, total_items: u64) -> u8 {
+    if total_items == 0 {
+        return 99;
+    }
+    let percent = 10 + (processed_items.saturating_mul(89) / total_items).min(89) as u8;
+    percent.min(99)
+}
+
+fn emit_scan_progress(
+    progress: &mut impl FnMut(OperationProgressPayload),
+    operation_id: &str,
+    stage: &str,
+    percent: u8,
+    current_location_hint: String,
+    scanned_files: u64,
+    found_groups: u64,
+    found_items: u64,
+    found_bytes: u64,
+) {
+    progress(progress_payload(
+        operation_id,
+        OperationModule::DuplicateScan,
+        stage,
+        percent,
+        current_location_hint,
+        scanned_files,
+        found_groups,
+        found_items,
+        found_bytes,
+        0,
+        0,
+        0,
+        0,
+    ));
+}
+
+fn emit_cleanup_progress(
+    progress: &mut impl FnMut(OperationProgressPayload),
+    operation_id: &str,
+    report: &DuplicateCleanupReport,
+    total_items: u64,
+    current_location_hint: String,
+) {
+    progress(progress_payload(
+        operation_id,
+        OperationModule::DuplicateCleanup,
+        "cleaning",
+        cleanup_progress_percent(report.processed_files, total_items),
+        current_location_hint,
+        0,
+        0,
+        0,
+        report.freed_bytes,
+        report.processed_files,
+        report.success_count,
+        report.skipped_count,
+        report.failed_count,
+    ));
+}
+
+fn progress_payload(
+    operation_id: &str,
+    module: OperationModule,
+    stage: &str,
+    percent: u8,
+    current_location_hint: String,
+    scanned_files: u64,
+    found_groups: u64,
+    found_items: u64,
+    found_bytes: u64,
+    processed_items: u64,
+    success_count: u64,
+    skipped_count: u64,
+    failed_count: u64,
+) -> OperationProgressPayload {
+    OperationProgressPayload {
+        operation_id: operation_id.to_string(),
+        module,
+        stage: stage.to_string(),
+        percent: percent.min(99),
+        current_location_hint,
+        current_file_type: None,
+        scanned_files,
+        found_groups,
+        found_items,
+        found_bytes,
+        processed_items,
+        success_count,
+        skipped_count,
+        failed_count,
+    }
+}
+
+fn emit_progress_payload(app_handle: &AppHandle, payload: OperationProgressPayload) {
+    let _ = app_handle.emit(OPERATION_PROGRESS_EVENT, payload);
+}
+
 fn emit_progress(
     app_handle: &AppHandle,
     operation_id: &str,
@@ -998,25 +1325,23 @@ fn emit_progress(
     found_items: u64,
     found_bytes: u64,
 ) {
-    let _ = app_handle.emit(
-        OPERATION_PROGRESS_EVENT,
-        OperationProgressPayload {
-            operation_id: operation_id.to_string(),
-            module,
-            stage: stage.to_string(),
-            percent,
-            current_location_hint: String::new(),
-            current_file_type: None,
-            scanned_files,
-            found_groups,
-            found_items,
-            found_bytes,
-            processed_items: 0,
-            success_count: 0,
-            skipped_count: 0,
-            failed_count: 0,
-        },
+    let mut payload = progress_payload(
+        operation_id,
+        module,
+        stage,
+        percent,
+        String::new(),
+        scanned_files,
+        found_groups,
+        found_items,
+        found_bytes,
+        0,
+        0,
+        0,
+        0,
     );
+    payload.percent = percent;
+    emit_progress_payload(app_handle, payload);
 }
 
 fn emit_finished(

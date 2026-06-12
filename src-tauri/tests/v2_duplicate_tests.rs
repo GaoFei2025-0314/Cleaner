@@ -5,13 +5,15 @@ use std::sync::{Arc, Mutex};
 
 use c_drive_cleaner::v2::duplicate::{
     apply_duplicate_recommendations, run_duplicate_cleanup_with_recycle_bin,
-    run_duplicate_cleanup_cancellable_for_test, scan_duplicate_files,
-    scan_duplicate_files_cancellable_for_test,
-    scan_duplicate_files_with_before_hash_for_test, DuplicateEntryRegistry,
+    run_duplicate_cleanup_cancellable_before_recycle_for_test,
+    run_duplicate_cleanup_cancellable_for_test, run_duplicate_cleanup_with_progress_for_test,
+    scan_duplicate_files, scan_duplicate_files_cancellable_for_test,
+    scan_duplicate_files_with_before_hash_for_test, scan_duplicate_files_with_progress_for_test,
+    DuplicateEntryRegistry,
 };
 use c_drive_cleaner::v2::models::{
     DuplicateCleanupFileRequest, DuplicateCleanupGroupRequest, DuplicateCleanupRequest,
-    DuplicateFileType, DuplicateRecommendedAction, DuplicateScanRequest,
+    DuplicateFileType, DuplicateRecommendedAction, DuplicateScanRequest, OperationProgressPayload,
 };
 use c_drive_cleaner::v2::path_safety::{
     is_protected_duplicate_path, should_skip_scan_location,
@@ -144,6 +146,35 @@ fn protected_duplicate_files_are_reported_but_not_auto_selected() {
         protected_file.recommended_action,
         DuplicateRecommendedAction::Clean
     );
+}
+
+#[test]
+fn custom_tar_gz_extension_matches_complete_filename_suffix() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(temp.path().join("a.tar.gz"), b"same").unwrap();
+    fs::write(temp.path().join("b.tar.gz"), b"same").unwrap();
+    fs::write(temp.path().join("c.gz"), b"same").unwrap();
+
+    let report = scan_duplicate_files(DuplicateScanRequest {
+        selected_drives: vec![],
+        custom_folders: vec![temp.path().to_string_lossy().to_string()],
+        file_types: vec![DuplicateFileType::Custom],
+        custom_extensions: vec!["tar.gz".to_string()],
+        include_suspected: false,
+        min_size_bytes: 1,
+        protected_paths: vec![],
+    })
+    .unwrap();
+
+    assert_eq!(report.strict_groups.len(), 1);
+    let names = report.strict_groups[0]
+        .files
+        .iter()
+        .map(|file| file.display_name.as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"a.tar.gz"));
+    assert!(names.contains(&"b.tar.gz"));
+    assert!(!names.contains(&"c.gz"));
 }
 
 #[test]
@@ -385,6 +416,133 @@ fn cleanup_cancellation_before_selected_hash_prevents_recycle_move() {
 
     assert_eq!(result.unwrap_err(), "操作已取消");
     assert!(recycle_bin.paths.lock().unwrap().is_empty());
+}
+
+#[test]
+fn cleanup_cancellation_after_retained_hash_prevents_recycle_move() {
+    let temp = tempfile::tempdir().unwrap();
+    let selected = temp.path().join("selected.txt");
+    let retained = temp.path().join("retained.txt");
+    fs::write(&selected, b"same").unwrap();
+    fs::write(&retained, b"same").unwrap();
+    let registry = DuplicateEntryRegistry::default();
+    registry.register_test_entry("group-1", "selected", &selected, false);
+    registry.register_test_entry("group-1", "retained", &retained, false);
+    let recycle_bin = RecordingRecycleBin::default();
+    let cancelled = AtomicBool::new(false);
+
+    let result = run_duplicate_cleanup_cancellable_before_recycle_for_test(
+        DuplicateCleanupRequest {
+            groups: vec![DuplicateCleanupGroupRequest {
+                group_id: "group-1".to_string(),
+                files: vec![
+                    DuplicateCleanupFileRequest {
+                        entry_id: "selected".to_string(),
+                        selected: true,
+                        protected: false,
+                    },
+                    DuplicateCleanupFileRequest {
+                        entry_id: "retained".to_string(),
+                        selected: false,
+                        protected: false,
+                    },
+                ],
+            }],
+            protected_override_confirmed: false,
+        },
+        &registry,
+        &recycle_bin,
+        &cancelled,
+        &[],
+        |path| {
+            if path.file_name().and_then(|name| name.to_str()) == Some("selected.txt") {
+                cancelled.store(true, Ordering::Relaxed);
+            }
+        },
+    );
+
+    assert_eq!(result.unwrap_err(), "操作已取消");
+    assert!(recycle_bin.paths.lock().unwrap().is_empty());
+}
+
+#[test]
+fn scan_progress_callback_reports_desensitized_stage_progress() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(temp.path().join("a.txt"), b"same").unwrap();
+    fs::write(temp.path().join("b.txt"), b"same").unwrap();
+    let mut progress = Vec::<OperationProgressPayload>::new();
+
+    let report = scan_duplicate_files_with_progress_for_test(
+        DuplicateScanRequest {
+            selected_drives: vec![],
+            custom_folders: vec![temp.path().to_string_lossy().to_string()],
+            file_types: vec![DuplicateFileType::Document],
+            custom_extensions: vec![],
+            include_suspected: false,
+            min_size_bytes: 1,
+            protected_paths: vec![],
+        },
+        |payload| progress.push(payload),
+    )
+    .unwrap();
+
+    assert_eq!(report.strict_groups.len(), 1);
+    assert!(progress.iter().any(|payload| payload.stage == "scanning"));
+    assert!(progress.iter().any(|payload| payload.stage == "hashing"));
+    assert!(progress.iter().all(|payload| payload.percent < 100));
+    assert!(progress.iter().all(|payload| {
+        !payload
+            .current_location_hint
+            .contains(&temp.path().display().to_string())
+    }));
+}
+
+#[test]
+fn cleanup_progress_callback_reports_counts_without_full_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let selected = temp.path().join("selected.txt");
+    let retained = temp.path().join("retained.txt");
+    fs::write(&selected, b"same").unwrap();
+    fs::write(&retained, b"same").unwrap();
+    let registry = DuplicateEntryRegistry::default();
+    registry.register_test_entry("group-1", "selected", &selected, false);
+    registry.register_test_entry("group-1", "retained", &retained, false);
+    let recycle_bin = RecordingRecycleBin::default();
+    let mut progress = Vec::<OperationProgressPayload>::new();
+
+    let report = run_duplicate_cleanup_with_progress_for_test(
+        DuplicateCleanupRequest {
+            groups: vec![DuplicateCleanupGroupRequest {
+                group_id: "group-1".to_string(),
+                files: vec![
+                    DuplicateCleanupFileRequest {
+                        entry_id: "selected".to_string(),
+                        selected: true,
+                        protected: false,
+                    },
+                    DuplicateCleanupFileRequest {
+                        entry_id: "retained".to_string(),
+                        selected: false,
+                        protected: false,
+                    },
+                ],
+            }],
+            protected_override_confirmed: false,
+        },
+        &registry,
+        &recycle_bin,
+        |payload| progress.push(payload),
+    );
+
+    assert_eq!(report.success_count, 1);
+    assert!(progress.iter().any(|payload| {
+        payload.processed_items == 1 && payload.success_count == 1 && payload.found_bytes > 0
+    }));
+    assert!(progress.iter().all(|payload| {
+        !payload
+            .current_location_hint
+            .contains(&temp.path().display().to_string())
+    }));
 }
 
 #[test]
