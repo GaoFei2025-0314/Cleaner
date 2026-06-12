@@ -19,7 +19,10 @@ use crate::v2::models::{
     OriginalFilePolicy,
 };
 use crate::v2::operations::OperationRegistry;
-use crate::v2::path_safety::{drive_label, normalized_existing_or_logical_path_key};
+use crate::v2::path_safety::{
+    drive_label, is_protected_duplicate_path, normalized_existing_or_logical_path_key,
+    safe_target_path_key,
+};
 use crate::v2::recycle_bin::{RecycleBin, SystemRecycleBin};
 
 pub fn validate_migration_target(
@@ -32,7 +35,7 @@ pub fn validate_migration_target(
         .parent()
         .ok_or_else(|| "无法识别源文件目录".to_string())?;
     let source_parent_key = normalized_existing_or_logical_path_key(source_parent);
-    let target_key = normalized_existing_or_logical_path_key(target_folder);
+    let target_key = safe_target_path_key(target_folder);
 
     if target_key == source_parent_key
         || target_key
@@ -57,6 +60,7 @@ pub fn run_large_file_migration_with_recycle_bin(
         recycle_bin,
         &[],
         None,
+        |_| {},
         |_| {},
         &mut progress,
         "",
@@ -89,6 +93,7 @@ where
         &[],
         None,
         |_| {},
+        |_| {},
         &mut progress,
         "test",
     )
@@ -114,6 +119,32 @@ where
         &[],
         Some(cancelled),
         before_recycle,
+        |_| {},
+        &mut progress,
+        "test",
+    )
+}
+
+#[doc(hidden)]
+pub fn run_large_file_migration_cancellable_before_verify_for_test<F>(
+    request: MigrationRequest,
+    registry: &LargeFileRegistry,
+    recycle_bin: &impl RecycleBin,
+    cancelled: &AtomicBool,
+    before_verify: F,
+) -> Result<MigrationResult, MigrationResult>
+where
+    F: FnMut(&Path),
+{
+    let mut progress = |_| {};
+    run_large_file_migration_internal(
+        request,
+        registry,
+        recycle_bin,
+        &[],
+        Some(cancelled),
+        |_| {},
+        before_verify,
         &mut progress,
         "test",
     )
@@ -134,6 +165,7 @@ pub fn run_large_file_migration_with_backend_protected_paths_for_test(
         backend_protected_paths,
         None,
         |_| {},
+        |_| {},
         &mut progress,
         "test",
     )
@@ -147,6 +179,7 @@ fn run_large_file_migration_internal<P>(
     backend_protected_paths: &[String],
     cancelled: Option<&AtomicBool>,
     mut before_recycle: impl FnMut(&Path),
+    mut before_verify: impl FnMut(&Path),
     progress: &mut P,
     operation_id: &str,
 ) -> Result<MigrationResult, MigrationResult>
@@ -216,7 +249,10 @@ where
             .get(&item_id)
             .map(|(_, category)| category.clone())
             .unwrap_or_else(|| entry.category.clone());
-        if (entry.protected || report_protected) && !request.protected_override_confirmed {
+        let backend_protected = is_protected_duplicate_path(&entry.path, backend_protected_paths);
+        if (entry.protected || report_protected || backend_protected)
+            && !request.protected_override_confirmed
+        {
             result.skipped_count += 1;
             push_item_result(
                 &mut result,
@@ -245,6 +281,7 @@ where
             backend_protected_paths,
             cancelled,
             &mut before_recycle,
+            &mut before_verify,
         ) {
             Ok(item_result) => {
                 match item_result.status {
@@ -309,6 +346,7 @@ fn migrate_one_item(
     backend_protected_paths: &[String],
     cancelled: Option<&AtomicBool>,
     before_recycle: &mut impl FnMut(&Path),
+    before_verify: &mut impl FnMut(&Path),
 ) -> Result<MigrationItemResult, ItemFailure> {
     check_cancelled(cancelled).map_err(|_| ItemFailure::Cancelled)?;
     if !entry.path.exists() {
@@ -324,16 +362,31 @@ fn migrate_one_item(
         .map_err(|_| ItemFailure::Failed("目标磁盘空间不足".to_string()))?;
     let target_path = unique_target_path(&target_folder, &entry.path)
         .ok_or_else(|| ItemFailure::Failed("无法生成目标文件名".to_string()))?;
+    let temp_path = unique_temp_copy_path(&target_folder)
+        .ok_or_else(|| ItemFailure::Failed("无法生成临时文件名".to_string()))?;
 
     check_cancelled(cancelled).map_err(|_| ItemFailure::Cancelled)?;
-    fs::copy(&entry.path, &target_path).map_err(|_| ItemFailure::Failed("复制失败".to_string()))?;
-    check_cancelled(cancelled).map_err(|_| ItemFailure::Cancelled)?;
-    verify_copied_file(&entry.path, &target_path, cancelled).map_err(|error| {
+    fs::copy(&entry.path, &temp_path).map_err(|_| ItemFailure::Failed("复制失败".to_string()))?;
+    before_verify(&temp_path);
+    if check_cancelled(cancelled).is_err() {
+        remove_temp_copy(&temp_path);
+        return Err(ItemFailure::Cancelled);
+    }
+    verify_copied_file(&entry.path, &temp_path, cancelled).map_err(|error| {
+        remove_temp_copy(&temp_path);
         if cancellation_requested(cancelled) {
             ItemFailure::Cancelled
         } else {
             ItemFailure::Failed(error)
         }
+    })?;
+    if check_cancelled(cancelled).is_err() {
+        remove_temp_copy(&temp_path);
+        return Err(ItemFailure::Cancelled);
+    }
+    fs::rename(&temp_path, &target_path).map_err(|_| {
+        remove_temp_copy(&temp_path);
+        ItemFailure::Failed("复制失败".to_string())
     })?;
 
     if request.original_file_policy == OriginalFilePolicy::KeepOriginal {
@@ -420,6 +473,7 @@ pub fn start_large_file_migration(
                 &backend_protected_paths,
                 Some(&cancelled),
                 |_| {},
+                |_| {},
                 &mut progress,
                 &operation_id_for_thread,
             )
@@ -499,7 +553,7 @@ fn reject_protected_target(
     target_folder: &Path,
     backend_protected_paths: &[String],
 ) -> Result<(), String> {
-    let key = normalized_existing_or_logical_path_key(target_folder);
+    let key = safe_target_path_key(target_folder);
     if key.starts_with(r"c:\windows")
         || key.starts_with(r"c:\program files")
         || key.starts_with(r"c:\program files (x86)")
@@ -529,7 +583,7 @@ fn key_is_same_or_child(path_key: &str, parent_key: &str) -> bool {
 
 fn ensure_available_space(target_folder: &Path, needed_bytes: u64) -> Result<(), String> {
     let disks = Disks::new_with_refreshed_list();
-    let target_key = normalized_existing_or_logical_path_key(target_folder);
+    let target_key = safe_target_path_key(target_folder);
     for disk in disks.iter() {
         let mount_key = normalized_existing_or_logical_path_key(disk.mount_point());
         if !mount_key.is_empty() && target_key.starts_with(&mount_key) {
@@ -566,6 +620,22 @@ fn unique_target_path(target_folder: &Path, source_path: &Path) -> Option<PathBu
         }
     }
     None
+}
+
+fn unique_temp_copy_path(target_folder: &Path) -> Option<PathBuf> {
+    for _ in 0..=999 {
+        let candidate = target_folder.join(format!(".cleaner-copy-{}.tmp", uuid::Uuid::new_v4()));
+        if !candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn remove_temp_copy(path: &Path) {
+    if path.exists() {
+        let _ = fs::remove_file(path);
+    }
 }
 
 fn verify_copied_file(

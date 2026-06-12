@@ -62,6 +62,22 @@ pub fn normalized_existing_or_logical_path_key(path: &Path) -> String {
         .unwrap_or_else(|| fold_logical_path_key(&normalized_path_key(path)))
 }
 
+pub fn safe_target_path_key(path: &Path) -> String {
+    let Some(existing_ancestor) = deepest_existing_ancestor(path) else {
+        return normalized_existing_or_logical_path_key(path);
+    };
+    let Ok(remaining) = path.strip_prefix(&existing_ancestor) else {
+        return normalized_existing_or_logical_path_key(path);
+    };
+    let ancestor_key = normalized_existing_or_logical_path_key(&existing_ancestor);
+    let remaining_key = fold_logical_path_key(&normalized_path_key(remaining));
+    if remaining_key.is_empty() {
+        ancestor_key
+    } else {
+        fold_logical_path_key(&join_logical_path_key(&ancestor_key, &remaining_key))
+    }
+}
+
 fn path_is_same_or_child(path_key: &str, protected_key: &str) -> bool {
     if protected_key.is_empty() {
         return false;
@@ -77,8 +93,25 @@ fn normalized_path_key(path: &Path) -> String {
     normalized_string_key(&path.display().to_string())
 }
 
+fn deepest_existing_ancestor(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|ancestor| ancestor.exists())
+        .map(Path::to_path_buf)
+}
+
+fn join_logical_path_key(parent_key: &str, child_key: &str) -> String {
+    if parent_key.is_empty() {
+        child_key.to_string()
+    } else if child_key.is_empty() {
+        parent_key.to_string()
+    } else {
+        format!("{parent_key}\\{child_key}")
+    }
+}
+
 fn normalized_string_key(path: &str) -> String {
-    let mut normalized = path.trim()
+    let mut normalized = path
+        .trim()
         .trim_end_matches(['\\', '/'])
         .replace('/', "\\")
         .to_ascii_lowercase();

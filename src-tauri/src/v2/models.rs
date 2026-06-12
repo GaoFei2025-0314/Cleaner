@@ -233,6 +233,7 @@ pub struct LargeFileScanRequest {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct LargeFileScanReport {
     pub items: Vec<LargeFileItem>,
     pub scanned_files: u64,
@@ -244,6 +245,7 @@ pub struct LargeFileScanReport {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct LargeFileItem {
     pub item_id: String,
     pub display_name: String,
@@ -270,6 +272,7 @@ pub struct MigrationRequest {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct MigrationResult {
     pub copied_count: u64,
     pub moved_to_recycle_bin_count: u64,
@@ -283,6 +286,7 @@ pub struct MigrationResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct MigrationItemResult {
     pub item_id: String,
     pub status: MigrationItemStatus,

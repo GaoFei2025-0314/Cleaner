@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use c_drive_cleaner::v2::large_files::LargeFileRegistry;
 use c_drive_cleaner::v2::migration::{
     run_large_file_migration_cancellable_before_recycle_for_test,
+    run_large_file_migration_cancellable_before_verify_for_test,
     run_large_file_migration_with_backend_protected_paths_for_test,
     run_large_file_migration_with_recycle_bin,
     target_conflicts_with_backend_protected_paths_for_test, validate_migration_target,
@@ -56,6 +57,38 @@ fn migration_request_rejects_unknown_raw_path_field() {
         "originalFilePolicy": "keepOriginal",
         "protectedOverrideConfirmed": false,
         "rawPath": "C:\\Users\\Example\\Downloads\\movie.mp4"
+    });
+
+    assert!(serde_json::from_value::<MigrationRequest>(payload).is_err());
+}
+
+#[test]
+fn migration_request_rejects_nested_raw_path_in_scan_report_item() {
+    let payload = serde_json::json!({
+        "selectedItemIds": ["item-1"],
+        "scanReport": {
+            "items": [{
+                "itemId": "item-1",
+                "displayName": "movie.mp4",
+                "drive": "C:",
+                "visibleLocationHint": "C:\\...\\用户文件",
+                "sizeBytes": 11,
+                "modifiedAt": "2026-06-12T00:00:00Z",
+                "category": "video",
+                "selected": true,
+                "protected": false,
+                "recommended": true,
+                "rawPath": "C:\\Users\\Alice\\Downloads\\movie.mp4"
+            }],
+            "scannedFiles": 1,
+            "skippedLocations": 0,
+            "totalBytes": 11,
+            "cDriveBytes": 11,
+            "otherDriveBytes": 0
+        },
+        "targetFolder": "D:\\Cleaner_MigratedFiles",
+        "originalFilePolicy": "keepOriginal",
+        "protectedOverrideConfirmed": false
     });
 
     assert!(serde_json::from_value::<MigrationRequest>(payload).is_err());
@@ -154,6 +187,35 @@ fn migration_skips_protected_item_without_override() {
 }
 
 #[test]
+fn migration_skips_backend_protected_source_without_override() {
+    let temp = tempfile::tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    fs::create_dir_all(&source_dir).unwrap();
+    let source = source_dir.join("movie.mp4");
+    let target = temp.path().join("out");
+    fs::write(&source, b"movie-bytes").unwrap();
+    let registry = registry_with_item("item-1", &source, false);
+    let recycle_bin = RecordingRecycleBin::default();
+
+    let result = run_large_file_migration_with_backend_protected_paths_for_test(
+        request_for(
+            "item-1",
+            false,
+            &target,
+            OriginalFilePolicy::MoveOriginalToRecycleBin,
+        ),
+        &registry,
+        &recycle_bin,
+        &[source_dir.to_string_lossy().to_string()],
+    );
+
+    assert_eq!(result.copied_count, 0);
+    assert_eq!(result.skipped_count, 1);
+    assert_eq!(recycle_bin.moved_count(), 0);
+    assert!(!target.join("movie.mp4").exists());
+}
+
+#[test]
 fn migration_rejects_target_inside_backend_protected_paths() {
     let temp = tempfile::tempdir().unwrap();
     let source_dir = temp.path().join("source");
@@ -209,6 +271,34 @@ fn cancellation_before_recycle_prevents_original_move() {
 }
 
 #[test]
+fn cancellation_before_verify_removes_temp_copy_and_does_not_report_copied() {
+    let temp = tempfile::tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    fs::create_dir_all(&source_dir).unwrap();
+    let source = source_dir.join("movie.mp4");
+    let target = temp.path().join("out");
+    fs::write(&source, b"movie-bytes").unwrap();
+    let registry = registry_with_item("item-1", &source, false);
+    let cancelled = AtomicBool::new(false);
+
+    let result = run_large_file_migration_cancellable_before_verify_for_test(
+        request_for("item-1", false, &target, OriginalFilePolicy::KeepOriginal),
+        &registry,
+        &RecordingRecycleBin::default(),
+        &cancelled,
+        |_| cancelled.store(true, Ordering::Relaxed),
+    )
+    .unwrap_err();
+
+    assert_eq!(result.copied_count, 0);
+    assert_eq!(result.total_copied_bytes, 0);
+    assert!(!target.join("movie.mp4").exists());
+    if target.exists() {
+        assert!(fs::read_dir(&target).unwrap().next().is_none());
+    }
+}
+
+#[test]
 fn migration_result_and_progress_are_path_free() {
     let temp = tempfile::tempdir().unwrap();
     let source_dir = temp.path().join("source");
@@ -233,6 +323,25 @@ fn migration_result_and_progress_are_path_free() {
     assert!(payloads
         .iter()
         .all(|payload| !payload.current_location_hint.contains(&temp_text)));
+}
+
+#[test]
+fn protected_target_is_rejected_when_existing_ancestor_is_symlink() {
+    let temp = tempfile::tempdir().unwrap();
+    let protected = temp.path().join("protected");
+    let link = temp.path().join("link");
+    fs::create_dir_all(&protected).unwrap();
+    if create_dir_symlink(&protected, &link).is_err() {
+        return;
+    }
+
+    let error = target_conflicts_with_backend_protected_paths_for_test(
+        &link.join("Migrated"),
+        &[protected.to_string_lossy().to_string()],
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("目标位置不能位于受保护目录内"));
 }
 
 fn empty_report() -> serde_json::Value {
@@ -309,4 +418,14 @@ impl RecycleBin for FailingRecycleBin {
     fn move_to_recycle_bin(&self, _path: &Path) -> Result<(), RecycleBinError> {
         Err(RecycleBinError::Failed("no recycle bin".to_string()))
     }
+}
+
+#[cfg(windows)]
+fn create_dir_symlink(original: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(original, link)
+}
+
+#[cfg(unix)]
+fn create_dir_symlink(original: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(original, link)
 }
