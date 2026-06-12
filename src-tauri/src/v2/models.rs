@@ -219,3 +219,84 @@ pub struct DuplicateCleanupReport {
     pub c_drive_freed_bytes: u64,
     pub other_drive_freed_bytes: u64,
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LargeFileScanRequest {
+    pub selected_drives: Vec<String>,
+    pub custom_folders: Vec<String>,
+    pub min_size_bytes: u64,
+    pub protected_paths: Vec<String>,
+    pub skip_system_dirs: bool,
+    pub skip_program_dirs: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LargeFileScanReport {
+    pub items: Vec<LargeFileItem>,
+    pub scanned_files: u64,
+    pub skipped_locations: u64,
+    pub total_bytes: u64,
+    pub c_drive_bytes: u64,
+    pub other_drive_bytes: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LargeFileItem {
+    pub item_id: String,
+    pub display_name: String,
+    pub drive: String,
+    pub visible_location_hint: String,
+    pub size_bytes: u64,
+    pub modified_at: String,
+    pub category: LargeFileCategory,
+    pub selected: bool,
+    pub protected: bool,
+    pub recommended: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct MigrationRequest {
+    pub selected_item_ids: Vec<String>,
+    pub scan_report: LargeFileScanReport,
+    pub target_folder: String,
+    pub original_file_policy: OriginalFilePolicy,
+    pub protected_override_confirmed: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationResult {
+    pub copied_count: u64,
+    pub moved_to_recycle_bin_count: u64,
+    pub skipped_count: u64,
+    pub failed_count: u64,
+    pub total_copied_bytes: u64,
+    pub total_freed_bytes: u64,
+    pub c_drive_freed_bytes: u64,
+    pub item_results: Vec<MigrationItemResult>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationItemResult {
+    pub item_id: String,
+    pub status: MigrationItemStatus,
+    pub category: LargeFileCategory,
+    pub bytes_copied: u64,
+    pub bytes_freed: u64,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MigrationItemStatus {
+    Copied,
+    CopiedAndFreed,
+    Skipped,
+    Failed,
+}

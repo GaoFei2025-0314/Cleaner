@@ -14,10 +14,12 @@ pub mod v2;
 
 use models::{CleanupResult, CleanupSelection, ScanReport};
 use paths::ScanRoots;
-use v2::models::{
-    CleanerSettings, DuplicateCleanupRequest, DuplicateScanRequest, HistoryEntry, OperationStart,
-};
 use v2::duplicate::DuplicateEntryRegistry;
+use v2::large_files::LargeFileRegistry;
+use v2::models::{
+    CleanerSettings, DuplicateCleanupRequest, DuplicateScanRequest, HistoryEntry,
+    LargeFileScanRequest, MigrationRequest, OperationStart,
+};
 use v2::operations::OperationRegistry;
 
 #[tauri::command]
@@ -86,10 +88,29 @@ fn start_duplicate_cleanup(
     v2::duplicate::start_duplicate_cleanup(app_handle, operations, request)
 }
 
+#[tauri::command]
+fn start_large_file_scan(
+    app_handle: tauri::AppHandle,
+    operations: tauri::State<'_, OperationRegistry>,
+    request: LargeFileScanRequest,
+) -> Result<OperationStart, String> {
+    v2::large_files::start_large_file_scan(app_handle, operations, request)
+}
+
+#[tauri::command]
+fn start_large_file_migration(
+    app_handle: tauri::AppHandle,
+    operations: tauri::State<'_, OperationRegistry>,
+    request: MigrationRequest,
+) -> Result<OperationStart, String> {
+    v2::migration::start_large_file_migration(app_handle, operations, request)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(OperationRegistry::default())
         .manage(DuplicateEntryRegistry::default())
+        .manage(LargeFileRegistry::default())
         .invoke_handler(tauri::generate_handler![
             ping,
             scan_c_drive,
@@ -100,7 +121,9 @@ pub fn run() {
             list_operation_history,
             clear_operation_history,
             start_duplicate_scan,
-            start_duplicate_cleanup
+            start_duplicate_cleanup,
+            start_large_file_scan,
+            start_large_file_migration
         ])
         .run(tauri::generate_context!())
         .expect("failed to run C Drive Cleaner");
