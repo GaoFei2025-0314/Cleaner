@@ -1,4 +1,5 @@
 pub mod duplicate;
+pub mod fixtures;
 pub mod history;
 pub mod large_files;
 pub mod migration;

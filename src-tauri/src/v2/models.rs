@@ -132,3 +132,88 @@ pub struct HistoryEntry {
     pub failed_count: u64,
     pub error_categories: Vec<String>,
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateScanRequest {
+    pub selected_drives: Vec<String>,
+    pub custom_folders: Vec<String>,
+    pub file_types: Vec<DuplicateFileType>,
+    pub custom_extensions: Vec<String>,
+    pub include_suspected: bool,
+    pub min_size_bytes: u64,
+    pub protected_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateScanReport {
+    pub strict_groups: Vec<DuplicateFileGroup>,
+    pub suspected_groups: Vec<DuplicateFileGroup>,
+    pub scanned_files: u64,
+    pub skipped_locations: u64,
+    pub total_reclaimable_bytes: u64,
+    pub c_drive_reclaimable_bytes: u64,
+    pub other_drive_reclaimable_bytes: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateFileGroup {
+    pub group_id: String,
+    pub strict_duplicate: bool,
+    pub total_bytes: u64,
+    pub reclaimable_bytes: u64,
+    pub files: Vec<DuplicateFileEntry>,
+    pub recommended_selection_reason: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateFileEntry {
+    pub entry_id: String,
+    pub display_name: String,
+    pub drive: String,
+    pub visible_location_hint: String,
+    pub size_bytes: u64,
+    pub modified_at: String,
+    pub hash_fingerprint_id: String,
+    pub selected: bool,
+    pub protected: bool,
+    pub recommended_action: DuplicateRecommendedAction,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateCleanupRequest {
+    pub groups: Vec<DuplicateCleanupGroupRequest>,
+    pub protected_paths: Vec<String>,
+    pub protected_override_confirmed: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateCleanupGroupRequest {
+    pub group_id: String,
+    pub files: Vec<DuplicateCleanupFileRequest>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateCleanupFileRequest {
+    pub path: String,
+    pub selected: bool,
+    pub protected: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateCleanupReport {
+    pub processed_files: u64,
+    pub success_count: u64,
+    pub skipped_count: u64,
+    pub failed_count: u64,
+    pub freed_bytes: u64,
+    pub c_drive_freed_bytes: u64,
+    pub other_drive_freed_bytes: u64,
+}

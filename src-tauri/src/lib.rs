@@ -14,7 +14,9 @@ pub mod v2;
 
 use models::{CleanupResult, CleanupSelection, ScanReport};
 use paths::ScanRoots;
-use v2::models::{CleanerSettings, HistoryEntry};
+use v2::models::{
+    CleanerSettings, DuplicateCleanupRequest, DuplicateScanRequest, HistoryEntry, OperationStart,
+};
 use v2::operations::OperationRegistry;
 
 #[tauri::command]
@@ -65,6 +67,24 @@ fn clear_operation_history(app_handle: tauri::AppHandle) -> Result<(), String> {
     v2::history::clear_operation_history(&app_handle)
 }
 
+#[tauri::command]
+fn start_duplicate_scan(
+    app_handle: tauri::AppHandle,
+    operations: tauri::State<'_, OperationRegistry>,
+    request: DuplicateScanRequest,
+) -> Result<OperationStart, String> {
+    v2::duplicate::start_duplicate_scan(app_handle, operations, request)
+}
+
+#[tauri::command]
+fn start_duplicate_cleanup(
+    app_handle: tauri::AppHandle,
+    operations: tauri::State<'_, OperationRegistry>,
+    request: DuplicateCleanupRequest,
+) -> Result<OperationStart, String> {
+    v2::duplicate::start_duplicate_cleanup(app_handle, operations, request)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(OperationRegistry::default())
@@ -76,7 +96,9 @@ pub fn run() {
             get_cleaner_settings,
             save_cleaner_settings,
             list_operation_history,
-            clear_operation_history
+            clear_operation_history,
+            start_duplicate_scan,
+            start_duplicate_cleanup
         ])
         .run(tauri::generate_context!())
         .expect("failed to run C Drive Cleaner");
