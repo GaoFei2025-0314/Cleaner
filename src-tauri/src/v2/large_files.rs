@@ -28,7 +28,6 @@ const OPERATION_FINISHED_EVENT: &str = "cleaner-operation-finished";
 pub struct LargeFileBackendEntry {
     pub item_id: String,
     pub path: PathBuf,
-    pub path_key: String,
     pub size_bytes: u64,
     pub drive: String,
     pub category: LargeFileCategory,
@@ -73,7 +72,6 @@ impl LargeFileRegistry {
                 LargeFileBackendEntry {
                     item_id: item_id.to_string(),
                     path: path.to_path_buf(),
-                    path_key: canonical_path_key(path),
                     size_bytes,
                     drive: drive_label(path),
                     category: categorize_large_file(path),
@@ -174,11 +172,7 @@ where
             let recommended = large_file_is_recommended(path, protected, &request);
             let item = LargeFileItem {
                 item_id: item_id.clone(),
-                display_name: path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("file")
-                    .to_string(),
+                display_name: String::new(),
                 drive: drive.clone(),
                 visible_location_hint: visible_location_hint(path),
                 size_bytes,
@@ -191,7 +185,6 @@ where
             backend_entries.push(LargeFileBackendEntry {
                 item_id,
                 path: path.to_path_buf(),
-                path_key,
                 size_bytes,
                 drive,
                 category,
@@ -215,8 +208,15 @@ where
         right
             .size_bytes
             .cmp(&left.size_bytes)
-            .then_with(|| left.display_name.cmp(&right.display_name))
+            .then_with(|| {
+                large_file_category_rank(&left.category)
+                    .cmp(&large_file_category_rank(&right.category))
+            })
+            .then_with(|| left.item_id.cmp(&right.item_id))
     });
+    for (index, item) in items.iter_mut().enumerate() {
+        item.display_name = anonymized_large_file_display_name(&item.category, index + 1);
+    }
     let total_bytes = items.iter().map(|item| item.size_bytes).sum();
     let c_drive_bytes = items
         .iter()
@@ -351,6 +351,32 @@ pub fn categorize_large_file(path: &Path) -> LargeFileCategory {
             LargeFileCategory::Document
         }
         _ => LargeFileCategory::Other,
+    }
+}
+
+fn anonymized_large_file_display_name(category: &LargeFileCategory, ordinal: usize) -> String {
+    format!("{} {}", large_file_category_label(category), ordinal)
+}
+
+fn large_file_category_label(category: &LargeFileCategory) -> &'static str {
+    match category {
+        LargeFileCategory::Video => "视频文件",
+        LargeFileCategory::Archive => "压缩包",
+        LargeFileCategory::Installer => "安装包",
+        LargeFileCategory::DiskImage => "磁盘镜像",
+        LargeFileCategory::Document => "文档",
+        LargeFileCategory::Other => "大文件",
+    }
+}
+
+fn large_file_category_rank(category: &LargeFileCategory) -> u8 {
+    match category {
+        LargeFileCategory::Video => 0,
+        LargeFileCategory::Archive => 1,
+        LargeFileCategory::Installer => 2,
+        LargeFileCategory::DiskImage => 3,
+        LargeFileCategory::Document => 4,
+        LargeFileCategory::Other => 5,
     }
 }
 

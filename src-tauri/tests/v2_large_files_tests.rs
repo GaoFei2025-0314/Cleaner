@@ -24,8 +24,36 @@ fn scan_large_files_returns_items_at_or_above_threshold() {
     .unwrap();
 
     assert_eq!(report.items.len(), 1);
-    assert_eq!(report.items[0].display_name, "large.zip");
+    assert_eq!(report.items[0].display_name, "压缩包 1");
     assert_eq!(report.items[0].size_bytes, 20);
+}
+
+#[test]
+fn large_file_scan_report_serialization_does_not_expose_private_identifiers() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_named_dir = temp.path().join("Alice");
+    fs::create_dir_all(&user_named_dir).unwrap();
+    let private_file_name =
+        "Alice-private-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.zip";
+    fs::write(user_named_dir.join(private_file_name), vec![0u8; 20]).unwrap();
+
+    let report = scan_large_files(LargeFileScanRequest {
+        selected_drives: vec![],
+        custom_folders: vec![user_named_dir.to_string_lossy().to_string()],
+        min_size_bytes: 20,
+        protected_paths: vec![],
+        skip_system_dirs: true,
+        skip_program_dirs: true,
+    })
+    .unwrap();
+    let json = serde_json::to_string(&report).unwrap();
+
+    assert_eq!(report.items.len(), 1);
+    assert_eq!(report.items[0].display_name, "压缩包 1");
+    assert!(!json.contains(private_file_name));
+    assert!(!json.contains(&user_named_dir.to_string_lossy().to_string()));
+    assert!(!json.contains("Alice"));
+    assert!(!json.contains("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"));
 }
 
 #[test]

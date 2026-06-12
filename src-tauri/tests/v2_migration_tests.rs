@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use c_drive_cleaner::v2::large_files::LargeFileRegistry;
 use c_drive_cleaner::v2::migration::{
-    copy_file_to_temp_with_cleanup_for_test, migration_operation_status_for_test,
+    copy_file_to_temp_with_cleanup_for_test, ensure_available_space_for_test,
+    migration_operation_status_for_test,
     run_large_file_migration_cancellable_before_recycle_for_test,
     run_large_file_migration_cancellable_before_verify_for_test,
     run_large_file_migration_with_backend_protected_paths_for_test,
@@ -123,6 +124,84 @@ fn migration_request_rejects_nested_raw_path_in_scan_report_item() {
     });
 
     assert!(serde_json::from_value::<MigrationRequest>(payload).is_err());
+}
+
+#[test]
+fn migration_rejects_relative_target_folder_without_copying() {
+    let temp = tempfile::tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    fs::create_dir_all(&source_dir).unwrap();
+    let source = source_dir.join("movie.mp4");
+    fs::write(&source, b"movie-bytes").unwrap();
+    let registry = registry_with_item("item-1", &source, false);
+    let mut request = request_for(
+        "item-1",
+        false,
+        Path::new("Cargo.toml"),
+        OriginalFilePolicy::KeepOriginal,
+    );
+    request.target_folder = "Cargo.toml".to_string();
+
+    let result = run_large_file_migration_with_recycle_bin(
+        request,
+        &registry,
+        &RecordingRecycleBin::default(),
+    );
+    let json = serde_json::to_string(&result).unwrap();
+
+    assert_eq!(result.copied_count, 0);
+    assert_eq!(result.failed_count, 1);
+    assert!(result.item_results[0]
+        .message
+        .contains("目标文件夹必须是本地磁盘绝对路径"));
+    assert!(!json.contains("Cargo.toml"));
+    assert!(!json.contains(&source.to_string_lossy().to_string()));
+}
+
+#[test]
+fn migration_rejects_empty_target_folder_without_copying() {
+    let temp = tempfile::tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    fs::create_dir_all(&source_dir).unwrap();
+    let source = source_dir.join("movie.mp4");
+    fs::write(&source, b"movie-bytes").unwrap();
+    let registry = registry_with_item("item-1", &source, false);
+    let mut request = request_for(
+        "item-1",
+        false,
+        temp.path(),
+        OriginalFilePolicy::KeepOriginal,
+    );
+    request.target_folder = "   ".to_string();
+
+    let result = run_large_file_migration_with_recycle_bin(
+        request,
+        &registry,
+        &RecordingRecycleBin::default(),
+    );
+    let json = serde_json::to_string(&result).unwrap();
+
+    assert_eq!(result.copied_count, 0);
+    assert_eq!(result.failed_count, 1);
+    assert!(result.item_results[0]
+        .message
+        .contains("目标文件夹不能为空"));
+    assert!(!json.contains(&source.to_string_lossy().to_string()));
+    assert!(!json.contains("movie.mp4"));
+}
+
+#[test]
+fn free_space_check_rejects_unmatched_target_disk() {
+    let error = ensure_available_space_for_test(
+        Path::new(r"Z:\Cleaner_MigratedFiles"),
+        1,
+        &[(r"C:", 1024)],
+    )
+    .unwrap_err();
+
+    assert!(error.contains("无法识别目标磁盘"));
+    assert!(!error.contains("Z:"));
+    assert!(!error.contains("Cleaner_MigratedFiles"));
 }
 
 #[test]

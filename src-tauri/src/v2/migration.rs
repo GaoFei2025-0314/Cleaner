@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use sha2::{Digest, Sha256};
@@ -20,8 +20,7 @@ use crate::v2::models::{
 };
 use crate::v2::operations::OperationRegistry;
 use crate::v2::path_safety::{
-    drive_label, is_protected_duplicate_path, normalized_existing_or_logical_path_key,
-    safe_target_path_key,
+    is_protected_duplicate_path, normalized_existing_or_logical_path_key, safe_target_path_key,
 };
 use crate::v2::recycle_bin::{RecycleBin, SystemRecycleBin};
 
@@ -96,6 +95,25 @@ pub fn select_best_mount_key_for_target_for_test(
     mount_keys: &[&str],
 ) -> Option<String> {
     select_best_mount_key_for_target(target_key, mount_keys.iter().copied())
+}
+
+#[doc(hidden)]
+pub fn ensure_available_space_for_test(
+    target_folder: &Path,
+    needed_bytes: u64,
+    mounts: &[(&str, u64)],
+) -> Result<(), String> {
+    let target_key = safe_target_path_key(target_folder);
+    ensure_available_space_for_mounts(
+        &target_key,
+        needed_bytes,
+        mounts.iter().map(|(mount_key, available_space)| {
+            (
+                normalized_existing_or_logical_path_key(Path::new(mount_key)),
+                *available_space,
+            )
+        }),
+    )
 }
 
 #[doc(hidden)]
@@ -401,8 +419,7 @@ fn migrate_one_item(
         .map_err(ItemFailure::Failed)?;
     fs::create_dir_all(&target_folder)
         .map_err(|_| ItemFailure::Failed("无法创建目标文件夹".to_string()))?;
-    ensure_available_space(&target_folder, entry.size_bytes)
-        .map_err(|_| ItemFailure::Failed("目标磁盘空间不足".to_string()))?;
+    ensure_available_space(&target_folder, entry.size_bytes).map_err(ItemFailure::Failed)?;
     let target_path = unique_target_path(&target_folder, &entry.path)
         .ok_or_else(|| ItemFailure::Failed("无法生成目标文件名".to_string()))?;
     let temp_path = unique_temp_copy_path(&target_folder)
@@ -592,15 +609,62 @@ fn migration_operation_status(
     }
 }
 
-fn resolve_target_folder(target_folder: &str, source_path: &Path) -> Result<PathBuf, ItemFailure> {
-    if !target_folder.trim().is_empty() {
-        return Ok(PathBuf::from(target_folder));
-    }
-    let drive = drive_label(source_path);
-    if drive.is_empty() {
+fn resolve_target_folder(target_folder: &str, _source_path: &Path) -> Result<PathBuf, ItemFailure> {
+    let trimmed = target_folder.trim();
+    if trimmed.is_empty() {
         return Err(ItemFailure::Failed("目标文件夹不能为空".to_string()));
     }
-    Ok(PathBuf::from(format!("{drive}\\Cleaner_MigratedFiles")))
+    let path = PathBuf::from(trimmed);
+    if !is_local_windows_drive_absolute_path(&path) {
+        return Err(ItemFailure::Failed(
+            "目标文件夹必须是本地磁盘绝对路径".to_string(),
+        ));
+    }
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_target_folder_rejects_empty_target_without_source_drive_default() {
+        let error =
+            resolve_target_folder("", Path::new(r"C:\Users\Alice\Downloads\private-movie.mp4"));
+
+        assert_failed_message(error, "目标文件夹不能为空");
+    }
+
+    #[test]
+    fn resolve_target_folder_rejects_relative_target() {
+        let error = resolve_target_folder(
+            "Cleaner_MigratedFiles",
+            Path::new(r"C:\Users\Alice\Downloads\private-movie.mp4"),
+        );
+
+        assert_failed_message(error, "目标文件夹必须是本地磁盘绝对路径");
+    }
+
+    #[test]
+    fn resolve_target_folder_rejects_unc_target() {
+        let error = resolve_target_folder(
+            r"\\server\share\Cleaner_MigratedFiles",
+            Path::new(r"C:\Users\Alice\Downloads\private-movie.mp4"),
+        );
+
+        assert_failed_message(error, "目标文件夹必须是本地磁盘绝对路径");
+    }
+
+    fn assert_failed_message(result: Result<PathBuf, ItemFailure>, expected: &str) {
+        match result {
+            Err(ItemFailure::Failed(message)) => {
+                assert!(message.contains(expected));
+                assert!(!message.contains("Alice"));
+                assert!(!message.contains("private-movie.mp4"));
+            }
+            _ => panic!("expected failed item result"),
+        }
+    }
 }
 
 fn reject_protected_target(
@@ -686,25 +750,52 @@ fn key_is_same_or_child(path_key: &str, parent_key: &str) -> bool {
 fn ensure_available_space(target_folder: &Path, needed_bytes: u64) -> Result<(), String> {
     let disks = Disks::new_with_refreshed_list();
     let target_key = safe_target_path_key(target_folder);
+    ensure_available_space_for_mounts(
+        &target_key,
+        needed_bytes,
+        disks.iter().map(|disk| {
+            (
+                normalized_existing_or_logical_path_key(disk.mount_point()),
+                disk.available_space(),
+            )
+        }),
+    )
+}
+
+fn ensure_available_space_for_mounts(
+    target_key: &str,
+    needed_bytes: u64,
+    mounts: impl IntoIterator<Item = (String, u64)>,
+) -> Result<(), String> {
     let mut best_match: Option<(usize, u64)> = None;
-    for disk in disks.iter() {
-        let mount_key = normalized_existing_or_logical_path_key(disk.mount_point());
+    for (mount_key, available_space) in mounts {
         if mount_key_matches_target(&target_key, &mount_key) {
             let mount_len = mount_key.len();
             if best_match
                 .map(|(best_len, _)| mount_len > best_len)
                 .unwrap_or(true)
             {
-                best_match = Some((mount_len, disk.available_space()));
+                best_match = Some((mount_len, available_space));
             }
         }
     }
-    if let Some((_, available_space)) = best_match {
-        if available_space < needed_bytes {
-            return Err("目标磁盘空间不足".to_string());
+
+    match best_match {
+        Some((_, available_space)) if available_space < needed_bytes => {
+            Err("目标磁盘空间不足".to_string())
         }
+        Some(_) => Ok(()),
+        None => Err("无法识别目标磁盘".to_string()),
     }
-    Ok(())
+}
+
+fn is_local_windows_drive_absolute_path(path: &Path) -> bool {
+    let mut components = path.components();
+    matches!(
+        components.next(),
+        Some(Component::Prefix(prefix))
+            if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+    ) && matches!(components.next(), Some(Component::RootDir))
 }
 
 fn select_best_mount_key_for_target<'a>(
