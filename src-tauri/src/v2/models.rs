@@ -201,7 +201,7 @@ pub struct DuplicateCleanupGroupRequest {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DuplicateCleanupFileRequest {
-    pub path: String,
+    pub entry_id: String,
     pub selected: bool,
     pub protected: bool,
 }

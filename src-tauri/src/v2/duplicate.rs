@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::SystemTime;
 
 use sha2::{Digest, Sha256};
@@ -19,16 +21,20 @@ use crate::v2::models::{
 };
 use crate::v2::operations::OperationRegistry;
 use crate::v2::path_safety::{
-    drive_label, is_protected_duplicate_path, selected_drive_to_root, should_skip_scan_location,
+    canonical_path_key, drive_label, is_protected_duplicate_path, selected_drive_to_root,
+    should_skip_scan_location,
 };
 use crate::v2::recycle_bin::{RecycleBin, SystemRecycleBin};
 use crate::v2::settings::sanitize_custom_extensions;
 
 const SUSPECTED_SIZE_DELTA_PERCENT: u64 = 2;
+const OPERATION_PROGRESS_EVENT: &str = "cleaner-operation-progress";
+const OPERATION_FINISHED_EVENT: &str = "cleaner-operation-finished";
 
 #[derive(Debug, Clone)]
 struct CandidateFile {
     path: PathBuf,
+    path_key: String,
     display_name: String,
     drive: String,
     visible_location_hint: String,
@@ -38,8 +44,72 @@ struct CandidateFile {
     normalized_stem: String,
 }
 
+#[derive(Debug, Clone)]
+struct DuplicateBackendEntry {
+    entry_id: String,
+    group_id: String,
+    path: PathBuf,
+    path_key: String,
+    protected: bool,
+}
+
+#[derive(Debug, Clone)]
+struct DuplicateScanOutcome {
+    report: DuplicateScanReport,
+    backend_entries: Vec<DuplicateBackendEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedCleanupEntry {
+    entry: DuplicateBackendEntry,
+    request_protected: bool,
+}
+
+#[derive(Default)]
+pub struct DuplicateEntryRegistry {
+    entries: Mutex<HashMap<String, DuplicateBackendEntry>>,
+}
+
+impl DuplicateEntryRegistry {
+    fn replace_entries(&self, entries: Vec<DuplicateBackendEntry>) {
+        let mut registry = self
+            .entries
+            .lock()
+            .expect("duplicate entry registry lock poisoned");
+        registry.clear();
+        for entry in entries {
+            registry.insert(entry.entry_id.clone(), entry);
+        }
+    }
+
+    fn get(&self, entry_id: &str) -> Option<DuplicateBackendEntry> {
+        self.entries
+            .lock()
+            .expect("duplicate entry registry lock poisoned")
+            .get(entry_id)
+            .cloned()
+    }
+
+    #[doc(hidden)]
+    pub fn register_test_entry(&self, group_id: &str, entry_id: &str, path: &Path, protected: bool) {
+        self.entries
+            .lock()
+            .expect("duplicate entry registry lock poisoned")
+            .insert(
+                entry_id.to_string(),
+                DuplicateBackendEntry {
+                    entry_id: entry_id.to_string(),
+                    group_id: group_id.to_string(),
+                    path: path.to_path_buf(),
+                    path_key: canonical_path_key(path),
+                    protected,
+                },
+            );
+    }
+}
+
 pub fn scan_duplicate_files(request: DuplicateScanRequest) -> Result<DuplicateScanReport, String> {
-    scan_duplicate_files_with_before_hash(request, |_| {})
+    scan_duplicate_files_internal(request, |_| {}, None).map(|outcome| outcome.report)
 }
 
 #[doc(hidden)]
@@ -50,13 +120,26 @@ pub fn scan_duplicate_files_with_before_hash_for_test<F>(
 where
     F: FnMut(&Path),
 {
-    scan_duplicate_files_with_before_hash(request, before_hash)
+    scan_duplicate_files_internal(request, before_hash, None).map(|outcome| outcome.report)
 }
 
-fn scan_duplicate_files_with_before_hash<F>(
+#[doc(hidden)]
+pub fn scan_duplicate_files_cancellable_for_test<F>(
+    request: DuplicateScanRequest,
+    cancelled: &AtomicBool,
+    before_hash: F,
+) -> Result<DuplicateScanReport, String>
+where
+    F: FnMut(&Path),
+{
+    scan_duplicate_files_internal(request, before_hash, Some(cancelled)).map(|outcome| outcome.report)
+}
+
+fn scan_duplicate_files_internal<F>(
     request: DuplicateScanRequest,
     mut before_hash: F,
-) -> Result<DuplicateScanReport, String>
+    cancelled: Option<&AtomicBool>,
+) -> Result<DuplicateScanOutcome, String>
 where
     F: FnMut(&Path),
 {
@@ -64,9 +147,11 @@ where
     let allowed_extensions = allowed_extensions(&request.file_types, &request.custom_extensions);
     let mut skipped_locations = 0_u64;
     let mut candidates_by_size: BTreeMap<u64, Vec<CandidateFile>> = BTreeMap::new();
+    let mut seen_paths = HashSet::new();
     let mut scanned_files = 0_u64;
 
     for root in scan_roots {
+        check_cancelled(cancelled)?;
         if should_skip_scan_location(&root, &request.protected_paths) {
             skipped_locations += 1;
             continue;
@@ -79,6 +164,7 @@ where
 
         let mut entries = WalkDir::new(&root).follow_links(false).into_iter();
         while let Some(entry) = entries.next() {
+            check_cancelled(cancelled)?;
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(_) => {
@@ -115,10 +201,15 @@ where
             if !extension_is_allowed(path, &allowed_extensions) {
                 continue;
             }
+            let path_key = canonical_path_key(path);
+            if !seen_paths.insert(path_key.clone()) {
+                continue;
+            }
 
             scanned_files += 1;
             let candidate = CandidateFile {
                 path: path.to_path_buf(),
+                path_key,
                 display_name: path
                     .file_name()
                     .and_then(|name| name.to_str())
@@ -138,8 +229,8 @@ where
         }
     }
 
-    let (mut strict_groups, skipped_hashes) =
-        strict_duplicate_groups(&candidates_by_size, &mut before_hash);
+    let (mut strict_groups, skipped_hashes, backend_entries) =
+        strict_duplicate_groups(&candidates_by_size, &mut before_hash, cancelled)?;
     skipped_locations += skipped_hashes;
     for group in &mut strict_groups {
         apply_duplicate_recommendations(group, &request.protected_paths);
@@ -154,14 +245,17 @@ where
     let (total_reclaimable_bytes, c_drive_reclaimable_bytes, other_drive_reclaimable_bytes) =
         reclaimable_totals(&strict_groups);
 
-    Ok(DuplicateScanReport {
-        strict_groups,
-        suspected_groups,
-        scanned_files,
-        skipped_locations,
-        total_reclaimable_bytes,
-        c_drive_reclaimable_bytes,
-        other_drive_reclaimable_bytes,
+    Ok(DuplicateScanOutcome {
+        report: DuplicateScanReport {
+            strict_groups,
+            suspected_groups,
+            scanned_files,
+            skipped_locations,
+            total_reclaimable_bytes,
+            c_drive_reclaimable_bytes,
+            other_drive_reclaimable_bytes,
+        },
+        backend_entries,
     })
 }
 
@@ -207,8 +301,19 @@ pub fn apply_duplicate_recommendations(
 
 pub fn run_duplicate_cleanup_with_recycle_bin(
     request: DuplicateCleanupRequest,
+    registry: &DuplicateEntryRegistry,
     recycle_bin: &impl RecycleBin,
 ) -> DuplicateCleanupReport {
+    run_duplicate_cleanup_internal(request, registry, recycle_bin, None)
+        .unwrap_or_else(|report| report)
+}
+
+fn run_duplicate_cleanup_internal(
+    request: DuplicateCleanupRequest,
+    registry: &DuplicateEntryRegistry,
+    recycle_bin: &impl RecycleBin,
+    cancelled: Option<&AtomicBool>,
+) -> Result<DuplicateCleanupReport, DuplicateCleanupReport> {
     let protected_paths = request.protected_paths.clone();
     let protected_override_confirmed = request.protected_override_confirmed;
     let mut report = DuplicateCleanupReport {
@@ -222,8 +327,37 @@ pub fn run_duplicate_cleanup_with_recycle_bin(
     };
 
     for group in request.groups {
-        let selected: Vec<_> = group.files.iter().filter(|file| file.selected).collect();
-        let retained: Vec<_> = group.files.iter().filter(|file| !file.selected).collect();
+        if check_cancelled(cancelled).is_err() {
+            return Err(report);
+        }
+
+        let mut selected = Vec::new();
+        let mut retained = Vec::new();
+        let mut seen_selected_ids = HashSet::new();
+        let mut seen_retained_ids = HashSet::new();
+
+        for file in &group.files {
+            let Some(entry) = registry.get(&file.entry_id) else {
+                report.failed_count += 1;
+                continue;
+            };
+            if entry.group_id != group.group_id {
+                report.skipped_count += 1;
+                continue;
+            }
+            let resolved = ResolvedCleanupEntry {
+                entry,
+                request_protected: file.protected,
+            };
+            if file.selected {
+                if seen_selected_ids.insert(file.entry_id.clone()) {
+                    selected.push(resolved);
+                }
+            } else if seen_retained_ids.insert(file.entry_id.clone()) {
+                retained.push(resolved);
+            }
+        }
+
         if selected.is_empty() {
             continue;
         }
@@ -232,23 +366,35 @@ pub fn run_duplicate_cleanup_with_recycle_bin(
             continue;
         }
 
-        let retained_fingerprints = retained
+        let retained_ids = retained
             .iter()
-            .filter_map(|file| file_fingerprint(Path::new(&file.path)).ok())
+            .map(|entry| entry.entry.entry_id.clone())
             .collect::<HashSet<_>>();
-        if retained_fingerprints.is_empty() {
-            report.skipped_count += selected.len() as u64;
-            continue;
-        }
-
+        let retained_path_keys = retained
+            .iter()
+            .map(|entry| entry.entry.path_key.clone())
+            .collect::<HashSet<_>>();
+        let mut selected_path_keys = HashSet::new();
         for file in selected {
+            if check_cancelled(cancelled).is_err() {
+                return Err(report);
+            }
             report.processed_files += 1;
-            let path = Path::new(&file.path);
+            let path = &file.entry.path;
             if !path.exists() {
                 report.failed_count += 1;
                 continue;
             }
-            if (file.protected || is_protected_duplicate_path(path, &protected_paths))
+            if retained_ids.contains(&file.entry.entry_id)
+                || retained_path_keys.contains(&file.entry.path_key)
+                || !selected_path_keys.insert(file.entry.path_key.clone())
+            {
+                report.skipped_count += 1;
+                continue;
+            }
+            if (file.request_protected
+                || file.entry.protected
+                || is_protected_duplicate_path(path, &protected_paths))
                 && !protected_override_confirmed
             {
                 report.skipped_count += 1;
@@ -259,7 +405,17 @@ pub fn run_duplicate_cleanup_with_recycle_bin(
                 report.failed_count += 1;
                 continue;
             };
-            if !retained_fingerprints.contains(&(size_bytes, hash)) {
+            let retained_fingerprints = retained
+                .iter()
+                .filter_map(|entry| {
+                    file_fingerprint(&entry.entry.path)
+                        .ok()
+                        .map(|fingerprint| (entry.entry.path_key.clone(), fingerprint))
+                })
+                .collect::<Vec<_>>();
+            if !retained_fingerprints.iter().any(|(retained_path_key, fingerprint)| {
+                retained_path_key != &file.entry.path_key && fingerprint == &(size_bytes, hash.clone())
+            }) {
                 report.skipped_count += 1;
                 continue;
             }
@@ -279,7 +435,7 @@ pub fn run_duplicate_cleanup_with_recycle_bin(
         }
     }
 
-    report
+    Ok(report)
 }
 
 pub fn start_duplicate_scan(
@@ -290,6 +446,7 @@ pub fn start_duplicate_scan(
     let token = operations.register();
     let operation_id = token.operation_id.clone();
     let operation_id_for_thread = operation_id.clone();
+    let cancelled = token.cancelled.clone();
 
     std::thread::spawn(move || {
         emit_progress(
@@ -304,14 +461,18 @@ pub fn start_duplicate_scan(
             0,
         );
 
-        let result = if token.cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+        let result = if cancelled.load(Ordering::Relaxed) {
             Err("操作已取消".to_string())
         } else {
-            scan_duplicate_files(request)
+            scan_duplicate_files_internal(request, |_| {}, Some(&cancelled))
         };
 
         let (status, payload, message) = match result {
-            Ok(report) => {
+            Ok(outcome) => {
+                let report = outcome.report;
+                app_handle
+                    .state::<DuplicateEntryRegistry>()
+                    .replace_entries(outcome.backend_entries);
                 emit_progress(
                     &app_handle,
                     &operation_id_for_thread,
@@ -369,6 +530,7 @@ pub fn start_duplicate_cleanup(
     let token = operations.register();
     let operation_id = token.operation_id.clone();
     let operation_id_for_thread = operation_id.clone();
+    let cancelled = token.cancelled.clone();
 
     std::thread::spawn(move || {
         emit_progress(
@@ -384,7 +546,7 @@ pub fn start_duplicate_cleanup(
         );
 
         let (status, payload, message) =
-            if token.cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+            if cancelled.load(Ordering::Relaxed) {
                 (
                     OperationStatus::Cancelled,
                     serde_json::Value::Null,
@@ -392,7 +554,19 @@ pub fn start_duplicate_cleanup(
                 )
             } else {
                 let started_at = now_rfc3339();
-                let report = run_duplicate_cleanup_with_recycle_bin(request, &SystemRecycleBin);
+                let cleanup_result = {
+                    let registry = app_handle.state::<DuplicateEntryRegistry>();
+                    run_duplicate_cleanup_internal(
+                        request,
+                        &registry,
+                        &SystemRecycleBin,
+                        Some(&cancelled),
+                    )
+                };
+                let cancelled_after_cleanup = cancelled.load(Ordering::Relaxed);
+                let report = match cleanup_result {
+                    Ok(report) | Err(report) => report,
+                };
                 let finished_at = now_rfc3339();
                 let _ = append_history_entry(
                     &app_handle,
@@ -424,9 +598,13 @@ pub fn start_duplicate_cleanup(
                     report.freed_bytes,
                 );
                 (
-                    OperationStatus::Completed,
+                    if cancelled_after_cleanup {
+                        OperationStatus::Cancelled
+                    } else {
+                        OperationStatus::Completed
+                    },
                     serde_json::to_value(report).unwrap_or(serde_json::Value::Null),
-                    None,
+                    cancelled_after_cleanup.then(|| "操作已取消".to_string()),
                 )
             };
 
@@ -507,34 +685,52 @@ fn extension_is_allowed(path: &Path, allowed_extensions: &Option<HashSet<String>
 fn strict_duplicate_groups<F>(
     candidates_by_size: &BTreeMap<u64, Vec<CandidateFile>>,
     before_hash: &mut F,
-) -> (Vec<DuplicateFileGroup>, u64)
+    cancelled: Option<&AtomicBool>,
+) -> Result<(Vec<DuplicateFileGroup>, u64, Vec<DuplicateBackendEntry>), String>
 where
     F: FnMut(&Path),
 {
     let mut groups = Vec::new();
+    let mut backend_entries = Vec::new();
     let mut skipped_locations = 0_u64;
 
     for candidates in candidates_by_size.values().filter(|files| files.len() >= 2) {
         let mut by_hash: HashMap<String, Vec<CandidateFile>> = HashMap::new();
         for candidate in candidates {
+            check_cancelled(cancelled)?;
             before_hash(&candidate.path);
-            let Ok(hash) = hash_file(&candidate.path) else {
-                skipped_locations += 1;
-                continue;
+            let hash = match hash_file_with_cancel(&candidate.path, cancelled) {
+                Ok(hash) => hash,
+                Err(error) if cancellation_requested(cancelled) => return Err(error),
+                Err(_) => {
+                    skipped_locations += 1;
+                    continue;
+                }
             };
             by_hash.entry(hash).or_default().push(candidate.clone());
         }
 
         for files in by_hash.into_values().filter(|files| files.len() >= 2) {
             let fingerprint_id = uuid::Uuid::new_v4().to_string();
+            let group_id = uuid::Uuid::new_v4().to_string();
             let total_bytes = files.iter().map(|file| file.size_bytes).sum();
             let mut entries = files
                 .into_iter()
-                .map(|file| duplicate_entry(file, fingerprint_id.clone()))
+                .map(|file| {
+                    let entry_id = uuid::Uuid::new_v4().to_string();
+                    backend_entries.push(DuplicateBackendEntry {
+                        entry_id: entry_id.clone(),
+                        group_id: group_id.clone(),
+                        path: file.path.clone(),
+                        path_key: file.path_key.clone(),
+                        protected: file.protected,
+                    });
+                    duplicate_entry(file, entry_id, fingerprint_id.clone())
+                })
                 .collect::<Vec<_>>();
             entries.sort_by(|left, right| left.display_name.cmp(&right.display_name));
             groups.push(DuplicateFileGroup {
-                group_id: uuid::Uuid::new_v4().to_string(),
+                group_id,
                 strict_duplicate: true,
                 total_bytes,
                 reclaimable_bytes: 0,
@@ -545,7 +741,7 @@ where
         }
     }
 
-    (groups, skipped_locations)
+    Ok((groups, skipped_locations, backend_entries))
 }
 
 fn suspected_duplicate_groups(candidates: Vec<CandidateFile>) -> Vec<DuplicateFileGroup> {
@@ -579,7 +775,11 @@ fn suspected_duplicate_groups(candidates: Vec<CandidateFile>) -> Vec<DuplicateFi
         let mut entries = files
             .into_iter()
             .map(|file| {
-                let mut entry = duplicate_entry(file, uuid::Uuid::new_v4().to_string());
+                let mut entry = duplicate_entry(
+                    file,
+                    uuid::Uuid::new_v4().to_string(),
+                    uuid::Uuid::new_v4().to_string(),
+                );
                 entry.recommended_action = DuplicateRecommendedAction::ManualReview;
                 entry
             })
@@ -598,9 +798,13 @@ fn suspected_duplicate_groups(candidates: Vec<CandidateFile>) -> Vec<DuplicateFi
     groups
 }
 
-fn duplicate_entry(file: CandidateFile, fingerprint_id: String) -> DuplicateFileEntry {
+fn duplicate_entry(
+    file: CandidateFile,
+    entry_id: String,
+    fingerprint_id: String,
+) -> DuplicateFileEntry {
     DuplicateFileEntry {
-        entry_id: uuid::Uuid::new_v4().to_string(),
+        entry_id,
         display_name: file.display_name,
         drive: file.drive,
         visible_location_hint: file.visible_location_hint,
@@ -651,10 +855,15 @@ fn reclaimable_totals(groups: &[DuplicateFileGroup]) -> (u64, u64, u64) {
 }
 
 fn hash_file(path: &Path) -> Result<String, String> {
+    hash_file_with_cancel(path, None)
+}
+
+fn hash_file_with_cancel(path: &Path, cancelled: Option<&AtomicBool>) -> Result<String, String> {
     let mut file = fs::File::open(path).map_err(|_| "无法读取重复文件".to_string())?;
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
+        check_cancelled(cancelled)?;
         let bytes_read = file
             .read(&mut buffer)
             .map_err(|_| "无法读取重复文件".to_string())?;
@@ -664,6 +873,20 @@ fn hash_file(path: &Path) -> Result<String, String> {
         hasher.update(&buffer[..bytes_read]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn check_cancelled(cancelled: Option<&AtomicBool>) -> Result<(), String> {
+    if cancellation_requested(cancelled) {
+        Err("操作已取消".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn cancellation_requested(cancelled: Option<&AtomicBool>) -> bool {
+    cancelled
+        .map(|cancelled| cancelled.load(Ordering::Relaxed))
+        .unwrap_or(false)
 }
 
 fn file_fingerprint(path: &Path) -> Result<(u64, String), String> {
@@ -740,7 +963,7 @@ fn emit_progress(
     found_bytes: u64,
 ) {
     let _ = app_handle.emit(
-        "operation-progress",
+        OPERATION_PROGRESS_EVENT,
         OperationProgressPayload {
             operation_id: operation_id.to_string(),
             module,
@@ -769,7 +992,7 @@ fn emit_finished(
     message: Option<String>,
 ) {
     let _ = app_handle.emit(
-        "operation-finished",
+        OPERATION_FINISHED_EVENT,
         OperationFinishedPayload {
             operation_id: operation_id.to_string(),
             module,

@@ -8,7 +8,7 @@ const SYSTEM_PATHS: &[&str] = &[
 ];
 
 pub fn is_protected_duplicate_path(path: &Path, protected_paths: &[String]) -> bool {
-    let path_key = normalized_path_key(path);
+    let path_key = canonical_path_key(path);
     SYSTEM_PATHS
         .iter()
         .any(|system_path| path_is_same_or_child(&path_key, &normalized_string_key(system_path)))
@@ -39,13 +39,20 @@ pub fn selected_drive_to_root(drive: &str) -> Option<PathBuf> {
 }
 
 pub fn drive_label(path: &Path) -> String {
-    let display = path.display().to_string();
+    let display = normalized_string_key(&path.display().to_string());
     let bytes = display.as_bytes();
     if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
         format!("{}:", (bytes[0] as char).to_ascii_uppercase())
     } else {
         String::new()
     }
+}
+
+pub fn canonical_path_key(path: &Path) -> String {
+    path.canonicalize()
+        .ok()
+        .map(|canonical| normalized_path_key(&canonical))
+        .unwrap_or_else(|| normalized_path_key(path))
 }
 
 fn path_is_same_or_child(path_key: &str, protected_key: &str) -> bool {
@@ -64,8 +71,21 @@ fn normalized_path_key(path: &Path) -> String {
 }
 
 fn normalized_string_key(path: &str) -> String {
-    path.trim()
+    let mut normalized = path.trim()
         .trim_end_matches(['\\', '/'])
         .replace('/', "\\")
-        .to_ascii_lowercase()
+        .to_ascii_lowercase();
+
+    loop {
+        let stripped = normalized
+            .strip_prefix(r"\\?\")
+            .or_else(|| normalized.strip_prefix(r"\??\"));
+        if let Some(remainder) = stripped {
+            normalized = remainder.to_string();
+        } else {
+            break;
+        }
+    }
+
+    normalized
 }

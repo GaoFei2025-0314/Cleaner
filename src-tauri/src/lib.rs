@@ -17,6 +17,7 @@ use paths::ScanRoots;
 use v2::models::{
     CleanerSettings, DuplicateCleanupRequest, DuplicateScanRequest, HistoryEntry, OperationStart,
 };
+use v2::duplicate::DuplicateEntryRegistry;
 use v2::operations::OperationRegistry;
 
 #[tauri::command]
@@ -88,6 +89,7 @@ fn start_duplicate_cleanup(
 pub fn run() {
     tauri::Builder::default()
         .manage(OperationRegistry::default())
+        .manage(DuplicateEntryRegistry::default())
         .invoke_handler(tauri::generate_handler![
             ping,
             scan_c_drive,
