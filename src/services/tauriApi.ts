@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { CleanupResult, CleanupSelection, ScanReport } from "../domain/models";
 import { mockReport } from "./mockReport";
 
-const isBrowserPreview = typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window);
+export const isBrowserPreview = typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window);
 
 export async function scanCDrive(): Promise<ScanReport> {
   if (isBrowserPreview) {
