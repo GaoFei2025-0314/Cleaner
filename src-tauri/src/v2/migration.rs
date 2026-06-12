@@ -31,6 +31,7 @@ pub fn validate_migration_target(
 ) -> Result<(), String> {
     let source_file = source_file.as_ref();
     let target_folder = target_folder.as_ref();
+    reject_parent_dir_traversal(target_folder)?;
     let source_parent = source_file
         .parent()
         .ok_or_else(|| "无法识别源文件目录".to_string())?;
@@ -576,11 +577,11 @@ fn reject_protected_target(
     target_folder: &Path,
     backend_protected_paths: &[String],
 ) -> Result<(), String> {
+    reject_parent_dir_traversal(target_folder)?;
     let key = safe_target_path_key(target_folder);
-    if key.starts_with(r"c:\windows")
-        || key.starts_with(r"c:\program files")
-        || key.starts_with(r"c:\program files (x86)")
-        || key.starts_with(r"c:\programdata")
+    if [r"c:\windows", r"c:\program files", r"c:\program files (x86)", r"c:\programdata"]
+        .iter()
+        .any(|protected_key| key_is_same_or_child(&key, protected_key))
         || backend_protected_paths.iter().any(|protected_path| {
             key_is_same_or_child(
                 &key,
@@ -589,6 +590,20 @@ fn reject_protected_target(
         })
     {
         Err("目标位置不能位于受保护目录内".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn reject_parent_dir_traversal(path: &Path) -> Result<(), String> {
+    if path
+        .display()
+        .to_string()
+        .replace('/', "\\")
+        .split('\\')
+        .any(|segment| segment == "..")
+    {
+        Err("目标位置不能包含上级目录跳转".to_string())
     } else {
         Ok(())
     }

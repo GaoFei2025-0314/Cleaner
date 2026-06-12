@@ -36,7 +36,18 @@ fn migration_target_with_traversal_cannot_resolve_inside_source_folder() {
     )
     .unwrap_err();
 
-    assert!(error.to_string().contains("目标位置不能位于源文件目录内"));
+    assert!(error.to_string().contains("目标位置不能包含上级目录跳转"));
+}
+
+#[test]
+fn migration_target_with_any_parent_traversal_is_rejected() {
+    let error = validate_migration_target(
+        r"C:\Users\Alice\Downloads\movie.mp4",
+        r"D:\Safe\..\Cleaner_MigratedFiles",
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("目标位置不能包含上级目录跳转"));
 }
 
 #[test]
@@ -44,6 +55,25 @@ fn backend_protected_target_with_traversal_is_rejected() {
     let error = target_conflicts_with_backend_protected_paths_for_test(
         Path::new(r"C:\Other\..\Protected\Migrated"),
         &[r"C:\Protected".to_string()],
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("目标位置不能包含上级目录跳转"));
+}
+
+#[test]
+fn system_protected_target_matching_uses_path_boundaries() {
+    assert!(
+        target_conflicts_with_backend_protected_paths_for_test(
+            Path::new(r"C:\Windows.old\Cleaner_MigratedFiles"),
+            &[],
+        )
+        .is_ok()
+    );
+
+    let error = target_conflicts_with_backend_protected_paths_for_test(
+        Path::new(r"C:\Windows\Temp\Cleaner_MigratedFiles"),
+        &[],
     )
     .unwrap_err();
 
