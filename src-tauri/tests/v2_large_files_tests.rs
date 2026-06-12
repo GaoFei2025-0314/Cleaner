@@ -2,7 +2,8 @@ use std::fs;
 use std::path::Path;
 
 use c_drive_cleaner::v2::large_files::{
-    large_file_is_recommended_for_test, scan_large_files, visible_location_hint,
+    large_file_is_recommended_for_test, large_file_should_skip_dir_for_test, scan_large_files,
+    visible_location_hint,
 };
 use c_drive_cleaner::v2::models::{LargeFileScanRequest, OperationModule};
 
@@ -130,6 +131,30 @@ fn large_file_recommendation_is_limited_to_c_drive_user_profile_files() {
     ));
     assert!(!large_file_is_recommended_for_test(
         Path::new(r"C:\Users\Alice\Downloads\big.iso"),
+        true
+    ));
+}
+
+#[test]
+fn large_file_system_skip_uses_path_boundaries() {
+    assert!(!large_file_should_skip_dir_for_test(
+        Path::new(r"C:\Windows.old"),
+        true,
+        true
+    ));
+    assert!(large_file_should_skip_dir_for_test(
+        Path::new(r"C:\Windows\Temp"),
+        true,
+        true
+    ));
+    assert!(!large_file_should_skip_dir_for_test(
+        Path::new(r"C:\Program Files Backup"),
+        true,
+        true
+    ));
+    assert!(large_file_should_skip_dir_for_test(
+        Path::new(r"C:\Program Files\App"),
+        true,
         true
     ));
 }

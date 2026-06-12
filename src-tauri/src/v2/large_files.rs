@@ -378,6 +378,23 @@ pub fn large_file_is_recommended_for_test(path: &Path, protected: bool) -> bool 
     large_file_is_recommended(path, protected, &request)
 }
 
+#[doc(hidden)]
+pub fn large_file_should_skip_dir_for_test(
+    path: &Path,
+    skip_system_dirs: bool,
+    skip_program_dirs: bool,
+) -> bool {
+    let request = LargeFileScanRequest {
+        selected_drives: Vec::new(),
+        custom_folders: Vec::new(),
+        min_size_bytes: 0,
+        protected_paths: Vec::new(),
+        skip_system_dirs,
+        skip_program_dirs,
+    };
+    should_skip_dir(path, &request)
+}
+
 pub fn check_cancelled(cancelled: Option<&AtomicBool>) -> Result<(), String> {
     if cancelled
         .map(|cancelled| cancelled.load(Ordering::Relaxed))
@@ -407,15 +424,29 @@ fn scan_roots(request: &LargeFileScanRequest) -> Vec<PathBuf> {
 
 fn should_skip_dir(path: &Path, request: &LargeFileScanRequest) -> bool {
     let key = canonical_path_key(path);
-    (request.skip_system_dirs && key.starts_with(r"c:\windows"))
+    (request.skip_system_dirs && key_is_same_or_child(&key, r"c:\windows"))
         || (request.skip_program_dirs
-            && (key.starts_with(r"c:\program files")
-                || key.starts_with(r"c:\program files (x86)")
-                || key.starts_with(r"c:\programdata")))
+            && [
+                r"c:\program files",
+                r"c:\program files (x86)",
+                r"c:\programdata",
+            ]
+            .iter()
+            .any(|program_dir| key_is_same_or_child(&key, program_dir)))
 }
 
 fn large_file_is_recommended(path: &Path, protected: bool, request: &LargeFileScanRequest) -> bool {
     !protected && is_c_drive_user_profile_file(path) && !should_skip_dir(path, request)
+}
+
+fn key_is_same_or_child(path_key: &str, parent_key: &str) -> bool {
+    if parent_key.is_empty() {
+        return false;
+    }
+    path_key == parent_key
+        || path_key
+            .strip_prefix(parent_key)
+            .is_some_and(|tail| tail.starts_with('\\'))
 }
 
 fn is_c_drive_user_profile_file(path: &Path) -> bool {

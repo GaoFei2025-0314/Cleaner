@@ -633,14 +633,14 @@ fn reject_protected_target(
 
 fn reject_target_link_ancestor(path: &Path) -> Result<(), String> {
     for ancestor in path.ancestors() {
-        if !ancestor.exists() {
-            continue;
-        }
-        let Ok(metadata) = fs::symlink_metadata(ancestor) else {
-            continue;
-        };
-        if metadata.file_type().is_symlink() || is_windows_reparse_point(&metadata) {
-            return Err("目标位置不能位于符号链接目录内".to_string());
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || is_windows_reparse_point(&metadata) {
+                    return Err("目标位置不能位于符号链接目录内".to_string());
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(_) => return Err("目标位置不能位于符号链接目录内".to_string()),
         }
     }
     Ok(())
