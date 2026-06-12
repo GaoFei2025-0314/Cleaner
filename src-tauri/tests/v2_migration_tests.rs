@@ -138,6 +138,25 @@ fn target_inside_source_parent_is_rejected_for_temp_paths() {
 }
 
 #[test]
+fn migration_target_inside_symlink_ancestor_is_rejected() {
+    let temp = tempfile::tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    let real_target_parent = temp.path().join("real-target-parent");
+    let link = temp.path().join("target-link");
+    fs::create_dir_all(&source_dir).unwrap();
+    fs::create_dir_all(&real_target_parent).unwrap();
+    if create_dir_symlink(&real_target_parent, &link).is_err() {
+        return;
+    }
+    let source = source_dir.join("movie.mp4");
+    fs::write(&source, b"movie").unwrap();
+
+    let error = validate_migration_target(&source, link.join("Migrated")).unwrap_err();
+
+    assert!(error.to_string().contains("目标位置不能位于符号链接目录内"));
+}
+
+#[test]
 fn migration_copies_and_verifies_size_and_hash_before_recycle() {
     let temp = tempfile::tempdir().unwrap();
     let source_dir = temp.path().join("source");
@@ -472,7 +491,7 @@ fn protected_target_is_rejected_when_existing_ancestor_is_symlink() {
     )
     .unwrap_err();
 
-    assert!(error.to_string().contains("目标位置不能位于受保护目录内"));
+    assert!(error.to_string().contains("目标位置不能位于符号链接目录内"));
 }
 
 #[test]

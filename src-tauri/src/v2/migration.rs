@@ -32,6 +32,7 @@ pub fn validate_migration_target(
     let source_file = source_file.as_ref();
     let target_folder = target_folder.as_ref();
     reject_parent_dir_traversal(target_folder)?;
+    reject_target_link_ancestor(target_folder)?;
     let source_parent = source_file
         .parent()
         .ok_or_else(|| "无法识别源文件目录".to_string())?;
@@ -607,6 +608,7 @@ fn reject_protected_target(
     backend_protected_paths: &[String],
 ) -> Result<(), String> {
     reject_parent_dir_traversal(target_folder)?;
+    reject_target_link_ancestor(target_folder)?;
     let key = safe_target_path_key(target_folder);
     if [
         r"c:\windows",
@@ -627,6 +629,34 @@ fn reject_protected_target(
     } else {
         Ok(())
     }
+}
+
+fn reject_target_link_ancestor(path: &Path) -> Result<(), String> {
+    for ancestor in path.ancestors() {
+        if !ancestor.exists() {
+            continue;
+        }
+        let Ok(metadata) = fs::symlink_metadata(ancestor) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || is_windows_reparse_point(&metadata) {
+            return Err("目标位置不能位于符号链接目录内".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn is_windows_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_windows_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
 }
 
 fn reject_parent_dir_traversal(path: &Path) -> Result<(), String> {
