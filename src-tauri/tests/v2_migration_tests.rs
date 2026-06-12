@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use c_drive_cleaner::v2::large_files::LargeFileRegistry;
 use c_drive_cleaner::v2::migration::{
-    copy_file_to_temp_with_cleanup_for_test,
+    copy_file_to_temp_with_cleanup_for_test, migration_operation_status_for_test,
     run_large_file_migration_cancellable_before_recycle_for_test,
     run_large_file_migration_cancellable_before_verify_for_test,
     run_large_file_migration_with_backend_protected_paths_for_test,
@@ -13,7 +13,8 @@ use c_drive_cleaner::v2::migration::{
     target_conflicts_with_backend_protected_paths_for_test, validate_migration_target,
 };
 use c_drive_cleaner::v2::models::{
-    LargeFileCategory, LargeFileItem, LargeFileScanReport, MigrationRequest, OriginalFilePolicy,
+    LargeFileCategory, LargeFileItem, LargeFileScanReport, MigrationRequest, MigrationResult,
+    OperationStatus, OriginalFilePolicy,
 };
 use c_drive_cleaner::v2::recycle_bin::{RecycleBin, RecycleBinError};
 
@@ -63,13 +64,11 @@ fn backend_protected_target_with_traversal_is_rejected() {
 
 #[test]
 fn system_protected_target_matching_uses_path_boundaries() {
-    assert!(
-        target_conflicts_with_backend_protected_paths_for_test(
-            Path::new(r"C:\Windows.old\Cleaner_MigratedFiles"),
-            &[],
-        )
-        .is_ok()
-    );
+    assert!(target_conflicts_with_backend_protected_paths_for_test(
+        Path::new(r"C:\Windows.old\Cleaner_MigratedFiles"),
+        &[],
+    )
+    .is_ok());
 
     let error = target_conflicts_with_backend_protected_paths_for_test(
         Path::new(r"C:\Windows\Temp\Cleaner_MigratedFiles"),
@@ -245,6 +244,89 @@ fn migration_skips_backend_protected_source_without_override() {
     assert_eq!(result.skipped_count, 1);
     assert_eq!(recycle_bin.moved_count(), 0);
     assert!(!target.join("movie.mp4").exists());
+}
+
+#[test]
+fn migration_skips_source_when_backend_protected_path_is_symlink() {
+    let temp = tempfile::tempdir().unwrap();
+    let protected = temp.path().join("protected");
+    let protected_link = temp.path().join("protected-link");
+    fs::create_dir_all(&protected).unwrap();
+    if create_dir_symlink(&protected, &protected_link).is_err() {
+        return;
+    }
+    let source = protected.join("movie.mp4");
+    let target = temp.path().join("out");
+    fs::write(&source, b"movie-bytes").unwrap();
+    let registry = registry_with_item("item-1", &source, false);
+    let recycle_bin = RecordingRecycleBin::default();
+
+    let result = run_large_file_migration_with_backend_protected_paths_for_test(
+        request_for(
+            "item-1",
+            false,
+            &target,
+            OriginalFilePolicy::MoveOriginalToRecycleBin,
+        ),
+        &registry,
+        &recycle_bin,
+        &[protected_link.to_string_lossy().to_string()],
+    );
+
+    assert_eq!(result.copied_count, 0);
+    assert_eq!(result.skipped_count, 1);
+    assert_eq!(recycle_bin.moved_count(), 0);
+    assert!(!target.join("movie.mp4").exists());
+}
+
+#[test]
+fn migration_uses_registry_snapshot_after_start() {
+    let temp = tempfile::tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    fs::create_dir_all(&source_dir).unwrap();
+    let first = source_dir.join("first.mp4");
+    let second = source_dir.join("second.mp4");
+    let target = temp.path().join("out");
+    fs::write(&first, b"first-bytes").unwrap();
+    fs::write(&second, b"second-byte").unwrap();
+    let registry = registry_with_items(&[("item-1", &first, false), ("item-2", &second, false)]);
+    let recycle_bin = RecordingRecycleBin::default();
+    let cancelled = AtomicBool::new(false);
+    let registry_cleared = AtomicBool::new(false);
+
+    let result = run_large_file_migration_cancellable_before_recycle_for_test(
+        request_for_items(
+            &[("item-1", false), ("item-2", false)],
+            &target,
+            OriginalFilePolicy::MoveOriginalToRecycleBin,
+        ),
+        &registry,
+        &recycle_bin,
+        &cancelled,
+        |_| {
+            if !registry_cleared.swap(true, Ordering::Relaxed) {
+                registry.replace_entries(Vec::new());
+            }
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.copied_count, 2);
+    assert_eq!(result.failed_count, 0);
+    assert!(target.join("first.mp4").exists());
+    assert!(target.join("second.mp4").exists());
+}
+
+#[test]
+fn completed_migration_status_ignores_late_cancel_flag() {
+    assert_eq!(
+        migration_operation_status_for_test(&Ok(empty_migration_result()), true),
+        OperationStatus::Completed
+    );
+    assert_eq!(
+        migration_operation_status_for_test(&Err(empty_migration_result()), false),
+        OperationStatus::Cancelled
+    );
 }
 
 #[test]
@@ -429,6 +511,14 @@ fn registry_with_item(item_id: &str, path: &Path, protected: bool) -> LargeFileR
     registry
 }
 
+fn registry_with_items(items: &[(&str, &Path, bool)]) -> LargeFileRegistry {
+    let registry = LargeFileRegistry::default();
+    for (item_id, path, protected) in items {
+        registry.register_test_entry(item_id, path, *protected);
+    }
+    registry
+}
+
 fn request_for(
     item_id: &str,
     protected: bool,
@@ -459,6 +549,57 @@ fn request_for(
         target_folder: target.to_string_lossy().to_string(),
         original_file_policy,
         protected_override_confirmed: false,
+    }
+}
+
+fn request_for_items(
+    items: &[(&str, bool)],
+    target: &Path,
+    original_file_policy: OriginalFilePolicy,
+) -> MigrationRequest {
+    MigrationRequest {
+        selected_item_ids: items
+            .iter()
+            .map(|(item_id, _)| (*item_id).to_string())
+            .collect(),
+        scan_report: LargeFileScanReport {
+            items: items
+                .iter()
+                .map(|(item_id, protected)| LargeFileItem {
+                    item_id: (*item_id).to_string(),
+                    display_name: "movie.mp4".to_string(),
+                    drive: String::new(),
+                    visible_location_hint: "folder".to_string(),
+                    size_bytes: 11,
+                    modified_at: "2026-06-12T00:00:00Z".to_string(),
+                    category: LargeFileCategory::Video,
+                    selected: true,
+                    protected: *protected,
+                    recommended: !*protected,
+                })
+                .collect(),
+            scanned_files: items.len() as u64,
+            skipped_locations: 0,
+            total_bytes: 11 * items.len() as u64,
+            c_drive_bytes: 0,
+            other_drive_bytes: 11 * items.len() as u64,
+        },
+        target_folder: target.to_string_lossy().to_string(),
+        original_file_policy,
+        protected_override_confirmed: false,
+    }
+}
+
+fn empty_migration_result() -> MigrationResult {
+    MigrationResult {
+        copied_count: 0,
+        moved_to_recycle_bin_count: 0,
+        skipped_count: 0,
+        failed_count: 0,
+        total_copied_bytes: 0,
+        total_freed_bytes: 0,
+        c_drive_freed_bytes: 0,
+        item_results: Vec::new(),
     }
 }
 

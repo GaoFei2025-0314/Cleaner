@@ -13,7 +13,7 @@ pub fn is_protected_duplicate_path(path: &Path, protected_paths: &[String]) -> b
         .iter()
         .any(|system_path| path_is_same_or_child(&path_key, &normalized_string_key(system_path)))
         || protected_paths.iter().any(|protected_path| {
-            path_is_same_or_child(&path_key, &normalized_string_key(protected_path))
+            path_is_same_or_child(&path_key, &protected_path_key(Path::new(protected_path)))
         })
 }
 
@@ -87,6 +87,10 @@ fn path_is_same_or_child(path_key: &str, protected_key: &str) -> bool {
         || path_key
             .strip_prefix(protected_key)
             .is_some_and(|tail| tail.starts_with('\\'))
+}
+
+fn protected_path_key(path: &Path) -> String {
+    normalized_existing_or_logical_path_key(path)
 }
 
 fn normalized_path_key(path: &Path) -> String {

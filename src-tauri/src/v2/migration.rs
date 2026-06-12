@@ -98,6 +98,14 @@ pub fn select_best_mount_key_for_target_for_test(
 }
 
 #[doc(hidden)]
+pub fn migration_operation_status_for_test(
+    migration_result: &Result<MigrationResult, MigrationResult>,
+    cancelled_after_completion: bool,
+) -> OperationStatus {
+    migration_operation_status(migration_result, cancelled_after_completion)
+}
+
+#[doc(hidden)]
 pub fn run_large_file_migration_with_progress_for_test<P>(
     request: MigrationRequest,
     registry: &LargeFileRegistry,
@@ -217,11 +225,7 @@ where
         c_drive_freed_bytes: 0,
         item_results: Vec::new(),
     };
-    let selected_ids = request
-        .selected_item_ids
-        .iter()
-        .cloned()
-        .collect::<HashSet<_>>();
+    let selected_entries = snapshot_selected_entries(&request.selected_item_ids, registry);
     let report_items = request
         .scan_report
         .items
@@ -233,15 +237,15 @@ where
             )
         })
         .collect::<HashMap<_, _>>();
-    let total_items = selected_ids.len() as u64;
+    let total_items = selected_entries.len() as u64;
     let mut processed_items = 0_u64;
 
-    for item_id in selected_ids {
+    for (item_id, entry) in selected_entries {
         if check_cancelled(cancelled).is_err() {
             return Err(result);
         }
         processed_items += 1;
-        let Some(entry) = registry.get(&item_id) else {
+        let Some(entry) = entry else {
             result.failed_count += 1;
             push_item_result(
                 &mut result,
@@ -352,6 +356,23 @@ where
     }
 
     Ok(result)
+}
+
+fn snapshot_selected_entries(
+    selected_item_ids: &[String],
+    registry: &LargeFileRegistry,
+) -> Vec<(String, Option<LargeFileBackendEntry>)> {
+    let mut seen = HashSet::new();
+    selected_item_ids
+        .iter()
+        .filter_map(|item_id| {
+            if seen.insert(item_id.clone()) {
+                Some((item_id.clone(), registry.get(item_id)))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 enum ItemFailure {
@@ -502,11 +523,12 @@ pub fn start_large_file_migration(
                 &operation_id_for_thread,
             )
         };
-        let cancelled_after = cancelled.load(Ordering::Relaxed);
+        let operation_status =
+            migration_operation_status(&migration_result, cancelled.load(Ordering::Relaxed));
         let report = match migration_result {
             Ok(report) | Err(report) => report,
         };
-        if !cancelled_after {
+        if operation_status == OperationStatus::Completed {
             let _ = append_history_entry(
                 &app_handle,
                 HistoryEntry {
@@ -546,13 +568,9 @@ pub fn start_large_file_migration(
             &app_handle,
             &operation_id_for_thread,
             OperationModule::LargeFileMigration,
-            if cancelled_after {
-                OperationStatus::Cancelled
-            } else {
-                OperationStatus::Completed
-            },
+            operation_status.clone(),
             serde_json::to_value(report).unwrap_or(serde_json::Value::Null),
-            cancelled_after.then(|| "操作已取消".to_string()),
+            (operation_status == OperationStatus::Cancelled).then(|| "操作已取消".to_string()),
         );
         app_handle
             .state::<OperationRegistry>()
@@ -560,6 +578,17 @@ pub fn start_large_file_migration(
     });
 
     Ok(OperationStart { operation_id })
+}
+
+fn migration_operation_status(
+    migration_result: &Result<MigrationResult, MigrationResult>,
+    _cancelled_after_completion: bool,
+) -> OperationStatus {
+    if migration_result.is_err() {
+        OperationStatus::Cancelled
+    } else {
+        OperationStatus::Completed
+    }
 }
 
 fn resolve_target_folder(target_folder: &str, source_path: &Path) -> Result<PathBuf, ItemFailure> {
@@ -579,9 +608,14 @@ fn reject_protected_target(
 ) -> Result<(), String> {
     reject_parent_dir_traversal(target_folder)?;
     let key = safe_target_path_key(target_folder);
-    if [r"c:\windows", r"c:\program files", r"c:\program files (x86)", r"c:\programdata"]
-        .iter()
-        .any(|protected_key| key_is_same_or_child(&key, protected_key))
+    if [
+        r"c:\windows",
+        r"c:\program files",
+        r"c:\program files (x86)",
+        r"c:\programdata",
+    ]
+    .iter()
+    .any(|protected_key| key_is_same_or_child(&key, protected_key))
         || backend_protected_paths.iter().any(|protected_path| {
             key_is_same_or_child(
                 &key,
