@@ -39,12 +39,16 @@ fn build_item(
     technical_path: String,
     estimated_bytes: u64,
 ) -> ScanItem {
-    let config_refs = find_config_references(
-        std::path::Path::new(&technical_path),
-        &ConfigSearchRoots {
-            user_profile: roots.user_profile.clone(),
-        },
-    );
+    let config_refs = if rule.protect_config_references {
+        find_config_references(
+            std::path::Path::new(&technical_path),
+            &ConfigSearchRoots {
+                user_profile: roots.user_profile.clone(),
+            },
+        )
+    } else {
+        Vec::new()
+    };
     let process_refs = find_process_references(std::path::Path::new(&technical_path));
 
     let mut risk_level = rule.risk_level.clone();

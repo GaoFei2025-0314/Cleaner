@@ -32,6 +32,8 @@ export function CleanupItemRow({
         <div className="cleanup-title-line">
           <h3>{item.title}</h3>
           <RiskBadge risk={item.riskLevel} />
+          {item.cleanupAction === "blockedByConfigReference" && <span className="action-badge">配置保护</span>}
+          {item.cleanupAction === "blockedByProcess" && <span className="action-badge">正在使用</span>}
         </div>
         <p>{item.description}</p>
         <p className="path-hint">{item.userVisiblePathHint}</p>

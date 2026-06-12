@@ -26,7 +26,6 @@ pub enum SourceCategory {
 #[serde(rename_all = "camelCase")]
 pub enum CleanupAction {
     DirectDelete,
-    RequiresAdmin,
     ExplainOnly,
     BlockedByProcess,
     BlockedByConfigReference,
@@ -52,6 +51,7 @@ pub struct ScanItem {
     pub estimated_bytes: u64,
     pub default_selected: bool,
     pub user_visible_path_hint: String,
+    #[serde(skip_serializing, skip_deserializing)]
     pub technical_path: Option<String>,
     pub reasons: Vec<String>,
     pub warnings: Vec<String>,
@@ -72,7 +72,6 @@ pub struct ScanReport {
 pub struct CleanupSelection {
     pub selected_item_ids: Vec<String>,
     pub high_risk_confirmed: bool,
-    pub request_admin_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -17,13 +17,26 @@ export function ConfirmStep({
   onConfirm: () => void;
 }) {
   const needsHighRisk = requiresHighRiskConfirmation(selectedIds, items);
+  const selected = new Set(selectedIds);
   const selectedItems = items.filter((item) => selectedIds.includes(item.id));
+  const untouchedItems = items.filter((item) => !selected.has(item.id));
+  const highRiskItems = selectedItems.filter((item) => item.riskLevel === "highRisk");
   const canConfirm = selectedIds.length > 0 && (!needsHighRisk || highRiskConfirmed);
 
   return (
     <div className="step-content">
       <p className="eyebrow">确认清理</p>
       <h2>预计释放 {formatBytes(estimateSelectedBytes(selectedIds, items))}</h2>
+      <div className="confirm-summary-grid">
+        <div>
+          <span>已选清理 {selectedItems.length} 项</span>
+          <strong>{formatBytes(estimateSelectedBytes(selectedIds, items))}</strong>
+        </div>
+        <div>
+          <span>不会触碰 {untouchedItems.length} 项</span>
+          <strong>保持原样</strong>
+        </div>
+      </div>
       <div className="confirm-list">
         {selectedItems.map((item) => (
           <div className="confirm-row" key={item.id}>
@@ -32,6 +45,19 @@ export function ConfirmStep({
           </div>
         ))}
       </div>
+      {highRiskItems.length > 0 && (
+        <section className="high-risk-summary">
+          <h3>高风险项目</h3>
+          <div className="confirm-list">
+            {highRiskItems.map((item) => (
+              <div className="confirm-row" key={item.id}>
+                <span>{item.title}</span>
+                <strong>{formatBytes(item.estimatedBytes)}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
       {needsHighRisk && (
         <label className="danger-confirm">
           <input

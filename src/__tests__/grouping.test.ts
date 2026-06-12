@@ -29,18 +29,31 @@ const items: ScanItem[] = [
     reasons: [],
     warnings: [],
   },
+  {
+    id: "windows-temp",
+    title: "Windows 临时文件",
+    description: "系统临时文件",
+    sourceCategory: "system",
+    riskLevel: "recommended",
+    cleanupAction: "directDelete",
+    estimatedBytes: 3,
+    defaultSelected: true,
+    userVisiblePathHint: "Windows 临时目录",
+    reasons: [],
+    warnings: [],
+  },
 ];
 
 describe("grouping", () => {
   it("groups items by risk", () => {
     const grouped = groupByRisk(items);
-    expect(grouped.recommended.map((item) => item.id)).toEqual(["a"]);
+    expect(grouped.recommended.map((item) => item.id)).toEqual(["a", "windows-temp"]);
     expect(grouped.highRisk.map((item) => item.id)).toEqual(["b"]);
   });
 
   it("groups items by source", () => {
     const grouped = groupBySource(items);
-    expect(grouped.system.map((item) => item.id)).toEqual(["a"]);
+    expect(grouped.system.map((item) => item.id)).toEqual(["a", "windows-temp"]);
     expect(grouped.wechat.map((item) => item.id)).toEqual(["b"]);
   });
 });

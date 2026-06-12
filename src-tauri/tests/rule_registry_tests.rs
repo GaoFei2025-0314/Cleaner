@@ -14,6 +14,7 @@ fn builtin_rules_include_user_temp_as_recommended() {
     assert_eq!(user_temp.cleanup_action, CleanupAction::DirectDelete);
     assert_eq!(user_temp.source_category, SourceCategory::System);
     assert!(matches!(user_temp.scope, RuleScope::UserLocalAppDataRelative(_)));
+    assert!(!user_temp.protect_config_references);
 }
 
 #[test]
@@ -43,14 +44,22 @@ fn not_cleanable_rules_are_not_default_selected() {
 }
 
 #[test]
-fn admin_required_rules_are_not_default_selected_in_v01() {
+fn builtin_rules_do_not_use_elevation_wording() {
     for rule in builtin_rules() {
-        if rule.cleanup_action == CleanupAction::RequiresAdmin {
-            assert!(
-                !rule.default_selected,
-                "admin-required rule selected by default: {}",
-                rule.id
-            );
+        assert!(
+            !rule.description.contains("管理员") && !rule.description.contains("提权"),
+            "elevation wording should not appear in the low-friction flow: {}",
+            rule.id
+        );
+    }
+}
+
+#[test]
+fn recommended_rules_are_directly_selectable() {
+    for rule in builtin_rules() {
+        if rule.risk_level == RiskLevel::Recommended {
+            assert_eq!(rule.cleanup_action, CleanupAction::DirectDelete);
+            assert!(rule.default_selected);
         }
     }
 }

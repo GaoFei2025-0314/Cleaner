@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use crate::errors::CleanerError;
 use crate::rules::{CleanupRule, RuleScope};
@@ -19,12 +19,22 @@ impl ScanRoots {
         let local_app_data = std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .ok_or_else(|| CleanerError::PathResolution("LOCALAPPDATA is not set".to_string()))?;
-        Ok(Self {
+        let roots = Self {
             c_drive: PathBuf::from(r"C:\"),
             user_profile,
             local_app_data,
             windows_dir: PathBuf::from(r"C:\Windows"),
-        })
+        };
+        roots.ensure_c_drive_scope()?;
+        Ok(roots)
+    }
+
+    pub fn ensure_c_drive_scope(&self) -> Result<(), CleanerError> {
+        ensure_c_drive_path(&self.c_drive)?;
+        ensure_c_drive_path(&self.user_profile)?;
+        ensure_c_drive_path(&self.local_app_data)?;
+        ensure_c_drive_path(&self.windows_dir)?;
+        Ok(())
     }
 }
 
@@ -54,4 +64,27 @@ pub fn ensure_under_root(path: &Path, root: &Path) -> Result<(), CleanerError> {
     } else {
         Err(CleanerError::PathOutsideAllowedRoot)
     }
+}
+
+pub fn ensure_c_drive_path(path: &Path) -> Result<(), CleanerError> {
+    if is_c_drive_path(path) {
+        Ok(())
+    } else {
+        Err(CleanerError::PathOutsideCDrive)
+    }
+}
+
+pub fn is_c_drive_path(path: &Path) -> bool {
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return false;
+    };
+    let Some(Component::RootDir) = components.next() else {
+        return false;
+    };
+
+    matches!(
+        prefix.kind(),
+        Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) if letter.eq_ignore_ascii_case(&b'C')
+    )
 }

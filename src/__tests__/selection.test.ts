@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ScanItem } from "../domain/models";
-import { buildDefaultSelection, requiresHighRiskConfirmation, toggleSelection } from "../domain/selection";
+import {
+  buildDefaultSelection,
+  highRiskSelectionChanged,
+  requiresHighRiskConfirmation,
+  toggleSelection,
+} from "../domain/selection";
 
 const items: ScanItem[] = [
   {
@@ -19,15 +24,15 @@ const items: ScanItem[] = [
   {
     id: "windows-temp",
     title: "Windows 临时文件",
-    description: "需要管理员权限",
+    description: "系统临时文件",
     sourceCategory: "system",
     riskLevel: "recommended",
-    cleanupAction: "requiresAdmin",
+    cleanupAction: "directDelete",
     estimatedBytes: 150,
     defaultSelected: true,
     userVisiblePathHint: "Windows 临时目录",
-    reasons: ["V0.1 仅展示管理员清理能力"],
-    warnings: ["当前版本不会执行提权清理"],
+    reasons: ["推荐清理"],
+    warnings: [],
   },
   {
     id: "wechat-video",
@@ -59,16 +64,15 @@ const items: ScanItem[] = [
 
 describe("selection", () => {
   it("selects only default selected cleanable items", () => {
-    expect(buildDefaultSelection(items)).toEqual(["temp"]);
+    expect(buildDefaultSelection(items)).toEqual(["temp", "windows-temp"]);
   });
 
   it("does not select not cleanable items", () => {
     expect(toggleSelection(["temp"], items[3], true)).toEqual(["temp"]);
   });
 
-  it("does not default select or toggle admin-required items in V0.1", () => {
-    expect(buildDefaultSelection(items)).toEqual(["temp"]);
-    expect(toggleSelection(["temp"], items[1], true)).toEqual(["temp"]);
+  it("allows users to toggle recommended system cleanup items", () => {
+    expect(toggleSelection(["temp"], items[1], true)).toEqual(["temp", "windows-temp"]);
   });
 
   it("allows users to select high risk cleanable items", () => {
@@ -77,5 +81,11 @@ describe("selection", () => {
 
   it("requires confirmation when a high risk item is selected", () => {
     expect(requiresHighRiskConfirmation(["temp", "wechat-video"], items)).toBe(true);
+  });
+
+  it("detects when the selected high risk item set changes", () => {
+    expect(highRiskSelectionChanged(["temp"], ["temp", "wechat-video"], items)).toBe(true);
+    expect(highRiskSelectionChanged(["temp", "wechat-video"], ["wechat-video", "temp"], items)).toBe(false);
+    expect(highRiskSelectionChanged(["temp", "wechat-video"], ["temp"], items)).toBe(true);
   });
 });

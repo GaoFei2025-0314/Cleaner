@@ -1,0 +1,98 @@
+<style>
+  .v02-mock-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+  .v02-mini { height: 270px; border: 1px solid #d7e3df; border-radius: 10px; overflow: hidden; background: #f7fbf9; box-shadow: 0 10px 24px rgba(15, 46, 42, .08); }
+  .v02-shell { display: grid; grid-template-columns: 76px 1fr; height: 100%; }
+  .v02-side { background: linear-gradient(180deg, #08c884, #00a77b); color: white; padding: 14px 8px; display: grid; gap: 12px; align-content: start; }
+  .v02-nav { height: 44px; border-radius: 8px; background: rgba(255,255,255,.18); display: grid; place-items: center; font-size: 11px; text-align: center; }
+  .v02-nav.active { background: rgba(255,255,255,.82); color: #027a60; font-weight: 700; }
+  .v02-main { padding: 16px; display: grid; gap: 12px; align-content: start; }
+  .v02-title { height: 28px; width: 70%; border-radius: 999px; background: #dbe9e5; }
+  .v02-button { justify-self: end; width: 92px; height: 34px; border-radius: 5px; background: #09b979; }
+  .v02-row { height: 42px; border: 1px solid #d7e3df; border-radius: 7px; background: white; }
+  .v02-card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .v02-card-small { height: 72px; border: 1px solid #d7e3df; border-radius: 8px; background: white; }
+  .v02-top { height: 54px; border-bottom: 1px solid #d7e3df; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; }
+  .v02-pill { width: 86px; height: 22px; border-radius: 999px; background: #dbe9e5; }
+  .v02-wide { grid-template-columns: 1fr; }
+  .v02-dashboard { height: 100%; padding: 16px; display: grid; grid-template-rows: auto 1fr; gap: 14px; background: #edf6f2; }
+  .v02-hero { border-radius: 10px; background: white; border: 1px solid #d7e3df; padding: 14px; display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+  .v02-module-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .v02-module { border-radius: 10px; background: white; border: 1px solid #d7e3df; }
+</style>
+
+<h2>V0.2 主界面结构选哪一种？</h2>
+<p class="subtitle">V0.2 已定为“重复文件清理 + 大文件迁移”，默认 C 盘，可选择其他磁盘/文件夹。请选择更符合你想要的产品方向的布局。</p>
+
+<div class="cards v02-mock-grid">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="v02-mini">
+      <div class="v02-shell">
+        <div class="v02-side">
+          <div class="v02-nav">C 盘清理</div>
+          <div class="v02-nav active">重复文件</div>
+          <div class="v02-nav">大文件迁移</div>
+          <div class="v02-nav">隐私清理<br>V0.3</div>
+        </div>
+        <div class="v02-main">
+          <div class="v02-title"></div>
+          <div class="v02-button"></div>
+          <div class="v02-row"></div>
+          <div class="v02-row"></div>
+          <div class="v02-row"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 参考软件式左侧工具栏</h3>
+      <p>最接近你给的参考图，用户能直接在四个工具之间切换。隐私清理先显示为 V0.3 预告或暂不启用。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="v02-mini">
+      <div class="v02-shell">
+        <div class="v02-side">
+          <div class="v02-nav active">清理总览</div>
+          <div class="v02-nav">重复文件</div>
+          <div class="v02-nav">大文件迁移</div>
+        </div>
+        <div class="v02-main">
+          <div class="v02-top"><div class="v02-pill"></div><div class="v02-button"></div></div>
+          <div class="v02-card-grid">
+            <div class="v02-card-small"></div>
+            <div class="v02-card-small"></div>
+            <div class="v02-card-small"></div>
+            <div class="v02-card-small"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 清理总览 + 子工具</h3>
+      <p>先展示 C 盘释放空间总览，再从总览进入重复文件和大文件迁移。更像一个普通用户的工作台。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="v02-mini">
+      <div class="v02-dashboard">
+        <div class="v02-hero">
+          <div>
+            <div class="v02-title"></div>
+            <div class="v02-pill" style="margin-top: 12px; width: 140px;"></div>
+          </div>
+          <div class="v02-button"></div>
+        </div>
+        <div class="v02-module-grid">
+          <div class="v02-module"></div>
+          <div class="v02-module"></div>
+          <div class="v02-module"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 首页任务卡片</h3>
+      <p>不强调左侧工具栏，第一屏就是几个任务卡片。现代一些，但和你给的参考图差异更大。</p>
+    </div>
+  </div>
+</div>

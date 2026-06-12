@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { CleanupResult, ScanReport } from "./domain/models";
-import { buildDefaultSelection } from "./domain/selection";
+import { buildDefaultSelection, highRiskSelectionChanged } from "./domain/selection";
 import { executeCleanup, scanCDrive } from "./services/tauriApi";
 import { AppShell } from "./components/AppShell";
 import { WelcomeStep } from "./components/WelcomeStep";
@@ -32,6 +32,8 @@ export default function App() {
   const [result, setResult] = useState<CleanupResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [failedAction, setFailedAction] = useState<FailedAction | null>(null);
+  const [scanProgress, setScanProgress] = useState(0);
+  const [cleanProgress, setCleanProgress] = useState(0);
   const [analyticsEnabled, setAnalyticsEnabled] = useState(
     () => localStorage.getItem("analyticsEnabled") !== "false",
   );
@@ -40,13 +42,19 @@ export default function App() {
     setErrorMessage(null);
     setFailedAction(null);
     setStep("scan");
+    const stopProgress = beginStagedProgress(setScanProgress, 92);
     try {
       const nextReport = await scanCDrive();
+      stopProgress();
+      setScanProgress(100);
+      await waitForProgressSettle();
       setReport(nextReport);
       setSelectedIds(buildDefaultSelection(nextReport.items));
       setHighRiskConfirmed(false);
       setStep("suggestions");
     } catch (error) {
+      stopProgress();
+      setScanProgress(0);
       setErrorMessage(toUserMessage(error));
       setFailedAction("scan");
       setStep("welcome");
@@ -58,15 +66,20 @@ export default function App() {
     setErrorMessage(null);
     setFailedAction(null);
     setStep("clean");
+    const stopProgress = beginStagedProgress(setCleanProgress, 94);
     try {
       const nextResult = await executeCleanup({
         selectedItemIds: selectedIds,
         highRiskConfirmed,
-        requestAdminMode: false,
       });
+      stopProgress();
+      setCleanProgress(100);
+      await waitForProgressSettle();
       setResult(nextResult);
       setStep("result");
     } catch (error) {
+      stopProgress();
+      setCleanProgress(0);
       setErrorMessage(toUserMessage(error));
       setFailedAction("clean");
       setStep("confirm");
@@ -97,6 +110,13 @@ export default function App() {
     localStorage.setItem("analyticsEnabled", String(enabled));
   }
 
+  function updateSelectedIds(nextIds: string[]) {
+    if (report && highRiskSelectionChanged(selectedIds, nextIds, report.items)) {
+      setHighRiskConfirmed(false);
+    }
+    setSelectedIds(nextIds);
+  }
+
   return (
     <AppShell currentStep={stepIndex[step]} report={report}>
       {errorMessage && (
@@ -116,14 +136,14 @@ export default function App() {
           onStart={() => void startScan()}
         />
       )}
-      {step === "scan" && <ScanStep />}
+      {step === "scan" && <ScanStep progress={scanProgress} />}
       {step === "suggestions" && report && (
         <SuggestionsStep
           items={report.items}
           selectedIds={selectedIds}
           view={view}
           onViewChange={setView}
-          onSelectionChange={setSelectedIds}
+          onSelectionChange={updateSelectedIds}
           onNext={() => setStep("confirm")}
         />
       )}
@@ -137,10 +157,25 @@ export default function App() {
           onConfirm={() => void confirmCleanup()}
         />
       )}
-      {step === "clean" && <CleanStep />}
+      {step === "clean" && <CleanStep progress={cleanProgress} />}
       {step === "result" && result && <ResultStep result={result} onRestart={restart} />}
     </AppShell>
   );
+}
+
+function beginStagedProgress(setProgress: (progress: number) => void, ceiling: number): () => void {
+  let progress = 8;
+  setProgress(progress);
+  const timer = window.setInterval(() => {
+    progress = Math.min(ceiling, progress + Math.max(1, Math.round((ceiling - progress) * 0.18)));
+    setProgress(progress);
+  }, 220);
+
+  return () => window.clearInterval(timer);
+}
+
+function waitForProgressSettle(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 180));
 }
 
 function toUserMessage(error: unknown): string {

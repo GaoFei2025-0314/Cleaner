@@ -3,13 +3,18 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
+
 use crate::config_refs::{find_config_references, ConfigSearchRoots};
 use crate::errors::CleanerError;
 use crate::fixtures::now_iso;
 use crate::models::{
     CleanupAction, CleanupItemResult, CleanupResult, CleanupSelection, RiskLevel, ScanItem,
 };
-use crate::paths::{ensure_under_root, resolve_rule_path, root_for_rule, ScanRoots};
+use crate::paths::{
+    ensure_c_drive_path, ensure_under_root, resolve_rule_path, root_for_rule, ScanRoots,
+};
 use crate::processes::find_process_references;
 use crate::rules::builtin_rules;
 
@@ -38,10 +43,28 @@ pub fn delete_path_contents(path: &Path) -> Result<u64, CleanerError> {
     if !path.exists() {
         return Ok(0);
     }
+    if is_link_or_reparse_point(path)? {
+        return Err(CleanerError::PathResolution(
+            "refusing to delete a link or reparse point".to_string(),
+        ));
+    }
+
+    let root = path.canonicalize()?;
 
     for entry in fs::read_dir(path)? {
         let entry = entry?;
         let child = entry.path();
+        if is_link_or_reparse_point(&child)? {
+            continue;
+        }
+        let child_root = match child.canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if !child_root.starts_with(&root) {
+            return Err(CleanerError::PathOutsideAllowedRoot);
+        }
         let size = crate::size::path_size_bytes(&child);
         if child.is_dir() {
             fs::remove_dir_all(&child)?;
@@ -63,6 +86,11 @@ pub fn delete_path_or_contents(path: &Path, contents_only: bool) -> Result<u64, 
     if !path.exists() {
         return Ok(0);
     }
+    if is_link_or_reparse_point(path)? {
+        return Err(CleanerError::PathResolution(
+            "refusing to delete a link or reparse point".to_string(),
+        ));
+    }
     if path.is_dir() {
         fs::remove_dir_all(path)?;
     } else {
@@ -77,15 +105,25 @@ pub fn execute_selected_cleanup(
     roots: &ScanRoots,
 ) -> Result<CleanupResult, String> {
     validate_high_risk_confirmation(selection, items)?;
-    let selected: HashSet<&str> = selection
-        .selected_item_ids
-        .iter()
-        .map(String::as_str)
-        .collect();
     let rules = builtin_rules();
     let mut results = Vec::new();
+    let mut seen = HashSet::new();
 
-    for item in items.iter().filter(|item| selected.contains(item.id.as_str())) {
+    for selected_id in &selection.selected_item_ids {
+        if !seen.insert(selected_id.as_str()) {
+            continue;
+        }
+
+        let Some(item) = items.iter().find(|item| item.id == *selected_id) else {
+            results.push(CleanupItemResult {
+                item_id: selected_id.clone(),
+                status: "skipped".to_string(),
+                freed_bytes: 0,
+                message: format!("{selected_id} 已跳过：清理前复查未再命中该项目。"),
+            });
+            continue;
+        };
+
         let Some(rule) = rules.iter().find(|rule| rule.id == item.id) else {
             results.push(CleanupItemResult {
                 item_id: item.id.clone(),
@@ -129,12 +167,25 @@ pub fn execute_selected_cleanup(
         };
 
         let expected_path = resolve_rule_path(rule, roots);
+        let expected_root = root_for_rule(rule, roots);
         if Path::new(path) != expected_path {
             results.push(CleanupItemResult {
                 item_id: item.id.clone(),
                 status: "failed".to_string(),
                 freed_bytes: 0,
                 message: format!("{} 清理失败：扫描路径和规则路径不一致。", item.title),
+            });
+            continue;
+        }
+
+        if let Err(error) =
+            ensure_c_drive_path(&expected_root).and_then(|_| ensure_c_drive_path(&expected_path))
+        {
+            results.push(CleanupItemResult {
+                item_id: item.id.clone(),
+                status: "failed".to_string(),
+                freed_bytes: 0,
+                message: format!("{} 清理失败：路径不在 C 盘范围内：{}。", item.title, error),
             });
             continue;
         }
@@ -149,7 +200,7 @@ pub fn execute_selected_cleanup(
             continue;
         }
 
-        if let Err(error) = ensure_under_root(&expected_path, &root_for_rule(rule, roots)) {
+        if let Err(error) = ensure_under_root(&expected_path, &expected_root) {
             results.push(CleanupItemResult {
                 item_id: item.id.clone(),
                 status: "failed".to_string(),
@@ -159,13 +210,14 @@ pub fn execute_selected_cleanup(
             continue;
         }
 
-        if !find_config_references(
-            &expected_path,
-            &ConfigSearchRoots {
-                user_profile: roots.user_profile.clone(),
-            },
-        )
-        .is_empty()
+        if rule.protect_config_references
+            && !find_config_references(
+                &expected_path,
+                &ConfigSearchRoots {
+                    user_profile: roots.user_profile.clone(),
+                },
+            )
+            .is_empty()
         {
             results.push(CleanupItemResult {
                 item_id: item.id.clone(),
@@ -181,7 +233,10 @@ pub fn execute_selected_cleanup(
                 item_id: item.id.clone(),
                 status: "skipped".to_string(),
                 freed_bytes: 0,
-                message: format!("{} 已跳过：清理前复查发现仍被运行中的程序使用。", item.title),
+                message: format!(
+                    "{} 已跳过：清理前复查发现仍被运行中的程序使用。",
+                    item.title
+                ),
             });
             continue;
         }
@@ -215,6 +270,23 @@ pub fn execute_selected_cleanup(
     Ok(build_cleanup_result(results))
 }
 
+fn is_link_or_reparse_point(path: &Path) -> Result<bool, CleanerError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Ok(true);
+    }
+
+    #[cfg(windows)]
+    {
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 fn path_is_old_enough(path: &Path, min_age_minutes: u64) -> bool {
     if min_age_minutes == 0 {
         return true;
@@ -231,7 +303,10 @@ fn path_is_old_enough(path: &Path, min_age_minutes: u64) -> bool {
 
 fn newest_modified_time(path: &Path) -> Option<SystemTime> {
     if path.is_file() {
-        return path.metadata().ok().and_then(|metadata| metadata.modified().ok());
+        return path
+            .metadata()
+            .ok()
+            .and_then(|metadata| metadata.modified().ok());
     }
 
     walkdir::WalkDir::new(path)

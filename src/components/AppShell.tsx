@@ -1,6 +1,8 @@
-import { HardDrive, ShieldCheck } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 import type { ScanReport } from "../domain/models";
 import { StepIndicator } from "./StepIndicator";
+
+const cleanerLogoUrl = new URL("../assets/cleaner-logo.png", import.meta.url).href;
 
 export function AppShell({
   currentStep,
@@ -15,7 +17,7 @@ export function AppShell({
     <main className="app-frame">
       <aside className="app-sidebar">
         <div className="brand-mark">
-          <HardDrive size={22} />
+          <img alt="Cleaner logo" className="cleaner-logo" src={cleanerLogoUrl} />
         </div>
         <div className="brand-copy">
           <p className="eyebrow">Cleaner</p>

@@ -27,7 +27,22 @@ export function requiresHighRiskConfirmation(selectedIds: string[], items: ScanI
   return items.some((item) => selected.has(item.id) && item.riskLevel === "highRisk");
 }
 
+export function highRiskSelectionChanged(previousIds: string[], nextIds: string[], items: ScanItem[]): boolean {
+  const previous = highRiskSelectionKey(previousIds, items);
+  const next = highRiskSelectionKey(nextIds, items);
+  return previous !== next;
+}
+
 export function estimateSelectedBytes(selectedIds: string[], items: ScanItem[]): number {
   const selected = new Set(selectedIds);
   return items.reduce((total, item) => (selected.has(item.id) ? total + item.estimatedBytes : total), 0);
+}
+
+function highRiskSelectionKey(selectedIds: string[], items: ScanItem[]): string {
+  const selected = new Set(selectedIds);
+  return items
+    .filter((item) => selected.has(item.id) && item.riskLevel === "highRisk")
+    .map((item) => item.id)
+    .sort()
+    .join("|");
 }

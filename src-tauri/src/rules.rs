@@ -20,6 +20,7 @@ pub struct CleanupRule {
     pub scope: RuleScope,
     pub delete_contents_only: bool,
     pub min_age_minutes: u64,
+    pub protect_config_references: bool,
 }
 
 pub fn builtin_rules() -> Vec<CleanupRule> {
@@ -35,30 +36,33 @@ pub fn builtin_rules() -> Vec<CleanupRule> {
             scope: RuleScope::UserLocalAppDataRelative("Temp"),
             delete_contents_only: true,
             min_age_minutes: 10,
+            protect_config_references: false,
         },
         CleanupRule {
             id: "windows-temp",
             title: "Windows 临时文件",
-            description: "系统和安装程序留下的临时材料，需要管理员权限；V0.1 只展示能力说明，不执行提权清理。",
+            description: "系统和安装程序留下的临时材料，普通模式会尝试清理，可删除的部分会被移除。",
             source_category: SourceCategory::System,
             risk_level: RiskLevel::Recommended,
-            cleanup_action: CleanupAction::RequiresAdmin,
-            default_selected: false,
+            cleanup_action: CleanupAction::DirectDelete,
+            default_selected: true,
             scope: RuleScope::WindowsRelative("Temp"),
             delete_contents_only: true,
             min_age_minutes: 30,
+            protect_config_references: false,
         },
         CleanupRule {
             id: "windows-update-download",
             title: "Windows 更新下载缓存",
-            description: "Windows 更新下载后的缓存文件，需要管理员权限；V0.1 只展示能力说明，不执行提权清理。",
+            description: "Windows 更新下载后的缓存文件，普通模式会尝试清理，可删除的部分会被移除。",
             source_category: SourceCategory::System,
             risk_level: RiskLevel::Recommended,
-            cleanup_action: CleanupAction::RequiresAdmin,
-            default_selected: false,
+            cleanup_action: CleanupAction::DirectDelete,
+            default_selected: true,
             scope: RuleScope::WindowsRelative("SoftwareDistribution\\Download"),
             delete_contents_only: true,
             min_age_minutes: 60,
+            protect_config_references: false,
         },
         CleanupRule {
             id: "wechat-data-root",
@@ -71,6 +75,7 @@ pub fn builtin_rules() -> Vec<CleanupRule> {
             scope: RuleScope::UserProfileRelative("Documents\\WeChat Files"),
             delete_contents_only: false,
             min_age_minutes: 0,
+            protect_config_references: false,
         },
         CleanupRule {
             id: "qq-data-root",
@@ -83,6 +88,7 @@ pub fn builtin_rules() -> Vec<CleanupRule> {
             scope: RuleScope::UserProfileRelative("Documents\\Tencent Files"),
             delete_contents_only: false,
             min_age_minutes: 0,
+            protect_config_references: false,
         },
         CleanupRule {
             id: "vscode-cached-vsix",
@@ -95,6 +101,7 @@ pub fn builtin_rules() -> Vec<CleanupRule> {
             scope: RuleScope::UserProfileRelative("AppData\\Roaming\\Code\\CachedExtensionVSIXs"),
             delete_contents_only: false,
             min_age_minutes: 10,
+            protect_config_references: true,
         },
     ]
 }

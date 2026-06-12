@@ -12,7 +12,6 @@ export type SourceCategory =
 
 export type CleanupAction =
   | "directDelete"
-  | "requiresAdmin"
   | "explainOnly"
   | "blockedByProcess"
   | "blockedByConfigReference";
@@ -33,7 +32,6 @@ export interface ScanItem {
   estimatedBytes: number;
   defaultSelected: boolean;
   userVisiblePathHint: string;
-  technicalPath?: string;
   reasons: string[];
   warnings: string[];
 }
@@ -49,7 +47,6 @@ export interface ScanReport {
 export interface CleanupSelection {
   selectedItemIds: string[];
   highRiskConfirmed: boolean;
-  requestAdminMode: boolean;
 }
 
 export interface CleanupItemResult {
