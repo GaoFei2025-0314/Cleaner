@@ -171,8 +171,7 @@ where
             let protected = is_protected_duplicate_path(path, &request.protected_paths);
             let category = categorize_large_file(path);
             let size_bytes = metadata.len();
-            let recommended =
-                !protected && drive.eq_ignore_ascii_case("C:") && !should_skip_dir(path, &request);
+            let recommended = large_file_is_recommended(path, protected, &request);
             let item = LargeFileItem {
                 item_id: item_id.clone(),
                 display_name: path
@@ -357,16 +356,26 @@ pub fn categorize_large_file(path: &Path) -> LargeFileCategory {
 
 pub fn visible_location_hint(path: &Path) -> String {
     let drive = drive_label(path);
-    let parent_name = path
-        .parent()
-        .and_then(|parent| parent.file_name())
-        .and_then(|name| name.to_str())
-        .unwrap_or("folder");
     if drive.is_empty() {
-        parent_name.to_string()
+        "文件夹".to_string()
+    } else if is_c_drive_user_profile_file(path) {
+        format!("{drive}\\...\\用户文件")
     } else {
-        format!("{drive}\\...\\{parent_name}")
+        format!("{drive}\\...\\文件夹")
     }
+}
+
+#[doc(hidden)]
+pub fn large_file_is_recommended_for_test(path: &Path, protected: bool) -> bool {
+    let request = LargeFileScanRequest {
+        selected_drives: Vec::new(),
+        custom_folders: Vec::new(),
+        min_size_bytes: 0,
+        protected_paths: Vec::new(),
+        skip_system_dirs: true,
+        skip_program_dirs: true,
+    };
+    large_file_is_recommended(path, protected, &request)
 }
 
 pub fn check_cancelled(cancelled: Option<&AtomicBool>) -> Result<(), String> {
@@ -403,6 +412,16 @@ fn should_skip_dir(path: &Path, request: &LargeFileScanRequest) -> bool {
             && (key.starts_with(r"c:\program files")
                 || key.starts_with(r"c:\program files (x86)")
                 || key.starts_with(r"c:\programdata")))
+}
+
+fn large_file_is_recommended(path: &Path, protected: bool, request: &LargeFileScanRequest) -> bool {
+    !protected && is_c_drive_user_profile_file(path) && !should_skip_dir(path, request)
+}
+
+fn is_c_drive_user_profile_file(path: &Path) -> bool {
+    let key = canonical_path_key(path);
+    key.strip_prefix(r"c:\users\")
+        .is_some_and(|tail| !tail.is_empty() && tail.contains('\\'))
 }
 
 fn scan_progress_percent(scanned_files: u64) -> u8 {

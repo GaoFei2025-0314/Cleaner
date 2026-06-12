@@ -55,6 +55,7 @@ pub fn run_large_file_migration_with_recycle_bin(
         request,
         registry,
         recycle_bin,
+        &[],
         None,
         |_| {},
         &mut progress,
@@ -77,6 +78,7 @@ where
         request,
         registry,
         recycle_bin,
+        &[],
         None,
         |_| {},
         &mut progress,
@@ -101,6 +103,7 @@ where
         request,
         registry,
         recycle_bin,
+        &[],
         Some(cancelled),
         before_recycle,
         &mut progress,
@@ -108,10 +111,32 @@ where
     )
 }
 
+#[doc(hidden)]
+pub fn run_large_file_migration_with_backend_protected_paths_for_test(
+    request: MigrationRequest,
+    registry: &LargeFileRegistry,
+    recycle_bin: &impl RecycleBin,
+    backend_protected_paths: &[String],
+) -> MigrationResult {
+    let mut progress = |_| {};
+    run_large_file_migration_internal(
+        request,
+        registry,
+        recycle_bin,
+        backend_protected_paths,
+        None,
+        |_| {},
+        &mut progress,
+        "test",
+    )
+    .unwrap_or_else(|report| report)
+}
+
 fn run_large_file_migration_internal<P>(
     request: MigrationRequest,
     registry: &LargeFileRegistry,
     recycle_bin: &impl RecycleBin,
+    backend_protected_paths: &[String],
     cancelled: Option<&AtomicBool>,
     mut before_recycle: impl FnMut(&Path),
     progress: &mut P,
@@ -209,6 +234,7 @@ where
             &request,
             &entry,
             recycle_bin,
+            backend_protected_paths,
             cancelled,
             &mut before_recycle,
         ) {
@@ -272,6 +298,7 @@ fn migrate_one_item(
     request: &MigrationRequest,
     entry: &LargeFileBackendEntry,
     recycle_bin: &impl RecycleBin,
+    backend_protected_paths: &[String],
     cancelled: Option<&AtomicBool>,
     before_recycle: &mut impl FnMut(&Path),
 ) -> Result<MigrationItemResult, ItemFailure> {
@@ -281,7 +308,8 @@ fn migrate_one_item(
     }
     let target_folder = resolve_target_folder(&request.target_folder, &entry.path)?;
     validate_migration_target(&entry.path, &target_folder).map_err(ItemFailure::Failed)?;
-    reject_protected_target(&target_folder).map_err(ItemFailure::Failed)?;
+    reject_protected_target(&target_folder, backend_protected_paths)
+        .map_err(ItemFailure::Failed)?;
     fs::create_dir_all(&target_folder)
         .map_err(|_| ItemFailure::Failed("无法创建目标文件夹".to_string()))?;
     ensure_available_space(&target_folder, entry.size_bytes)
@@ -374,10 +402,14 @@ pub fn start_large_file_migration(
         ));
         let migration_result = {
             let registry = app_handle.state::<LargeFileRegistry>();
+            let backend_protected_paths = crate::v2::settings::get_cleaner_settings(&app_handle)
+                .map(|settings| settings.protected_paths)
+                .unwrap_or_default();
             run_large_file_migration_internal(
                 request,
                 &registry,
                 &SystemRecycleBin,
+                &backend_protected_paths,
                 Some(&cancelled),
                 |_| {},
                 &mut progress,
@@ -455,17 +487,33 @@ fn resolve_target_folder(target_folder: &str, source_path: &Path) -> Result<Path
     Ok(PathBuf::from(format!("{drive}\\Cleaner_MigratedFiles")))
 }
 
-fn reject_protected_target(target_folder: &Path) -> Result<(), String> {
+fn reject_protected_target(
+    target_folder: &Path,
+    backend_protected_paths: &[String],
+) -> Result<(), String> {
     let key = canonical_path_key(target_folder);
     if key.starts_with(r"c:\windows")
         || key.starts_with(r"c:\program files")
         || key.starts_with(r"c:\program files (x86)")
         || key.starts_with(r"c:\programdata")
+        || backend_protected_paths.iter().any(|protected_path| {
+            key_is_same_or_child(&key, &canonical_path_key(Path::new(protected_path)))
+        })
     {
         Err("目标位置不能位于受保护目录内".to_string())
     } else {
         Ok(())
     }
+}
+
+fn key_is_same_or_child(path_key: &str, parent_key: &str) -> bool {
+    if parent_key.is_empty() {
+        return false;
+    }
+    path_key == parent_key
+        || path_key
+            .strip_prefix(parent_key)
+            .is_some_and(|tail| tail.starts_with('\\'))
 }
 
 fn ensure_available_space(target_folder: &Path, needed_bytes: u64) -> Result<(), String> {

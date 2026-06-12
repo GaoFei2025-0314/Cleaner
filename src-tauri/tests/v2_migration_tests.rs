@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use c_drive_cleaner::v2::large_files::LargeFileRegistry;
 use c_drive_cleaner::v2::migration::{
     run_large_file_migration_cancellable_before_recycle_for_test,
+    run_large_file_migration_with_backend_protected_paths_for_test,
     run_large_file_migration_with_recycle_bin, validate_migration_target,
 };
 use c_drive_cleaner::v2::models::{
@@ -126,6 +127,29 @@ fn migration_skips_protected_item_without_override() {
 
     assert_eq!(result.copied_count, 0);
     assert_eq!(result.skipped_count, 1);
+    assert!(!target.join("movie.mp4").exists());
+}
+
+#[test]
+fn migration_rejects_target_inside_backend_protected_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    fs::create_dir_all(&source_dir).unwrap();
+    let source = source_dir.join("movie.mp4");
+    let protected_root = temp.path().join("protected");
+    let target = protected_root.join("out");
+    fs::write(&source, b"movie-bytes").unwrap();
+    let registry = registry_with_item("item-1", &source, false);
+
+    let result = run_large_file_migration_with_backend_protected_paths_for_test(
+        request_for("item-1", false, &target, OriginalFilePolicy::KeepOriginal),
+        &registry,
+        &RecordingRecycleBin::default(),
+        &[protected_root.to_string_lossy().to_string()],
+    );
+
+    assert_eq!(result.copied_count, 0);
+    assert_eq!(result.failed_count, 1);
     assert!(!target.join("movie.mp4").exists());
 }
 
