@@ -19,7 +19,7 @@ use crate::v2::models::{
     OriginalFilePolicy,
 };
 use crate::v2::operations::OperationRegistry;
-use crate::v2::path_safety::{canonical_path_key, drive_label};
+use crate::v2::path_safety::{drive_label, normalized_existing_or_logical_path_key};
 use crate::v2::recycle_bin::{RecycleBin, SystemRecycleBin};
 
 pub fn validate_migration_target(
@@ -31,8 +31,8 @@ pub fn validate_migration_target(
     let source_parent = source_file
         .parent()
         .ok_or_else(|| "无法识别源文件目录".to_string())?;
-    let source_parent_key = canonical_path_key(source_parent);
-    let target_key = canonical_path_key(target_folder);
+    let source_parent_key = normalized_existing_or_logical_path_key(source_parent);
+    let target_key = normalized_existing_or_logical_path_key(target_folder);
 
     if target_key == source_parent_key
         || target_key
@@ -62,6 +62,14 @@ pub fn run_large_file_migration_with_recycle_bin(
         "",
     )
     .unwrap_or_else(|report| report)
+}
+
+#[doc(hidden)]
+pub fn target_conflicts_with_backend_protected_paths_for_test(
+    target_folder: &Path,
+    backend_protected_paths: &[String],
+) -> Result<(), String> {
+    reject_protected_target(target_folder, backend_protected_paths)
 }
 
 #[doc(hidden)]
@@ -491,13 +499,16 @@ fn reject_protected_target(
     target_folder: &Path,
     backend_protected_paths: &[String],
 ) -> Result<(), String> {
-    let key = canonical_path_key(target_folder);
+    let key = normalized_existing_or_logical_path_key(target_folder);
     if key.starts_with(r"c:\windows")
         || key.starts_with(r"c:\program files")
         || key.starts_with(r"c:\program files (x86)")
         || key.starts_with(r"c:\programdata")
         || backend_protected_paths.iter().any(|protected_path| {
-            key_is_same_or_child(&key, &canonical_path_key(Path::new(protected_path)))
+            key_is_same_or_child(
+                &key,
+                &normalized_existing_or_logical_path_key(Path::new(protected_path)),
+            )
         })
     {
         Err("目标位置不能位于受保护目录内".to_string())
@@ -518,9 +529,9 @@ fn key_is_same_or_child(path_key: &str, parent_key: &str) -> bool {
 
 fn ensure_available_space(target_folder: &Path, needed_bytes: u64) -> Result<(), String> {
     let disks = Disks::new_with_refreshed_list();
-    let target_key = canonical_path_key(target_folder);
+    let target_key = normalized_existing_or_logical_path_key(target_folder);
     for disk in disks.iter() {
-        let mount_key = canonical_path_key(disk.mount_point());
+        let mount_key = normalized_existing_or_logical_path_key(disk.mount_point());
         if !mount_key.is_empty() && target_key.starts_with(&mount_key) {
             if disk.available_space() >= needed_bytes {
                 return Ok(());

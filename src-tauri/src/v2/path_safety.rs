@@ -55,6 +55,13 @@ pub fn canonical_path_key(path: &Path) -> String {
         .unwrap_or_else(|| normalized_path_key(path))
 }
 
+pub fn normalized_existing_or_logical_path_key(path: &Path) -> String {
+    path.canonicalize()
+        .ok()
+        .map(|canonical| normalized_path_key(&canonical))
+        .unwrap_or_else(|| fold_logical_path_key(&normalized_path_key(path)))
+}
+
 fn path_is_same_or_child(path_key: &str, protected_key: &str) -> bool {
     if protected_key.is_empty() {
         return false;
@@ -95,4 +102,69 @@ fn normalized_string_key(path: &str) -> String {
     }
 
     normalized
+}
+
+fn fold_logical_path_key(path_key: &str) -> String {
+    let (prefix, rest, rooted) = split_logical_path_prefix(path_key);
+    let mut segments = Vec::new();
+
+    for segment in rest.split('\\') {
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        if segment == ".." {
+            if let Some(last) = segments.last() {
+                if last != ".." {
+                    segments.pop();
+                    continue;
+                }
+            }
+            if !rooted {
+                segments.push(segment.to_string());
+            }
+            continue;
+        }
+        segments.push(segment.to_string());
+    }
+
+    let tail = segments.join("\\");
+    if prefix.is_empty() {
+        tail
+    } else if tail.is_empty() {
+        prefix
+    } else if rooted {
+        format!("{prefix}\\{tail}")
+    } else {
+        format!("{prefix}{tail}")
+    }
+}
+
+fn split_logical_path_prefix(path_key: &str) -> (String, &str, bool) {
+    if let Some(rest) = path_key.strip_prefix(r"\\") {
+        let mut parts = rest.split('\\');
+        let server = parts.next().unwrap_or_default();
+        let share = parts.next().unwrap_or_default();
+        if !server.is_empty() && !share.is_empty() {
+            let prefix = format!(r"\\{server}\{share}");
+            let rest = path_key
+                .get(prefix.len()..)
+                .unwrap_or_default()
+                .trim_start_matches('\\');
+            return (prefix, rest, true);
+        }
+        return (r"\\".to_string(), rest, true);
+    }
+
+    let bytes = path_key.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        let prefix = path_key[..2].to_string();
+        let rest = path_key[2..].trim_start_matches('\\');
+        return (prefix, rest, true);
+    }
+
+    if let Some(rest) = path_key.strip_prefix('\\') {
+        return ("\\".to_string(), rest, true);
+    }
+
+    (String::new(), path_key, false)
 }

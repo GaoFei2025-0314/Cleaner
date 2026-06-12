@@ -6,7 +6,8 @@ use c_drive_cleaner::v2::large_files::LargeFileRegistry;
 use c_drive_cleaner::v2::migration::{
     run_large_file_migration_cancellable_before_recycle_for_test,
     run_large_file_migration_with_backend_protected_paths_for_test,
-    run_large_file_migration_with_recycle_bin, validate_migration_target,
+    run_large_file_migration_with_recycle_bin,
+    target_conflicts_with_backend_protected_paths_for_test, validate_migration_target,
 };
 use c_drive_cleaner::v2::models::{
     LargeFileCategory, LargeFileItem, LargeFileScanReport, MigrationRequest, OriginalFilePolicy,
@@ -22,6 +23,28 @@ fn migration_target_cannot_be_inside_source_folder() {
     .unwrap_err();
 
     assert!(error.to_string().contains("目标位置不能位于源文件目录内"));
+}
+
+#[test]
+fn migration_target_with_traversal_cannot_resolve_inside_source_folder() {
+    let error = validate_migration_target(
+        r"C:\Users\Alice\Downloads\movie.mp4",
+        r"C:\Users\Alice\Other\..\Downloads\Cleaner_MigratedFiles",
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("目标位置不能位于源文件目录内"));
+}
+
+#[test]
+fn backend_protected_target_with_traversal_is_rejected() {
+    let error = target_conflicts_with_backend_protected_paths_for_test(
+        Path::new(r"C:\Other\..\Protected\Migrated"),
+        &[r"C:\Protected".to_string()],
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("目标位置不能位于受保护目录内"));
 }
 
 #[test]
