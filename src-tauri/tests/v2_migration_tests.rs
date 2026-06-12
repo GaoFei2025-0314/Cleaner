@@ -1,13 +1,15 @@
 use std::fs;
+use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use c_drive_cleaner::v2::large_files::LargeFileRegistry;
 use c_drive_cleaner::v2::migration::{
+    copy_file_to_temp_with_cleanup_for_test,
     run_large_file_migration_cancellable_before_recycle_for_test,
     run_large_file_migration_cancellable_before_verify_for_test,
     run_large_file_migration_with_backend_protected_paths_for_test,
-    run_large_file_migration_with_recycle_bin,
+    run_large_file_migration_with_recycle_bin, select_best_mount_key_for_target_for_test,
     target_conflicts_with_backend_protected_paths_for_test, validate_migration_target,
 };
 use c_drive_cleaner::v2::models::{
@@ -299,6 +301,23 @@ fn cancellation_before_verify_removes_temp_copy_and_does_not_report_copied() {
 }
 
 #[test]
+fn copy_error_removes_partial_temp_copy() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.bin");
+    let temp_copy = temp.path().join(".cleaner-copy-partial.tmp");
+    fs::write(&source, b"source").unwrap();
+
+    let error = copy_file_to_temp_with_cleanup_for_test(&source, &temp_copy, |_, temp_path| {
+        fs::write(temp_path, b"partial").unwrap();
+        Err(io::Error::new(io::ErrorKind::Other, "copy failed"))
+    })
+    .unwrap_err();
+
+    assert!(error.contains("复制失败"));
+    assert!(!temp_copy.exists());
+}
+
+#[test]
 fn migration_result_and_progress_are_path_free() {
     let temp = tempfile::tempdir().unwrap();
     let source_dir = temp.path().join("source");
@@ -342,6 +361,25 @@ fn protected_target_is_rejected_when_existing_ancestor_is_symlink() {
     .unwrap_err();
 
     assert!(error.to_string().contains("目标位置不能位于受保护目录内"));
+}
+
+#[test]
+fn free_space_mount_matching_uses_longest_boundary_match() {
+    assert_eq!(
+        select_best_mount_key_for_target_for_test(
+            r"c:\mount\child",
+            &[r"c:", r"c:\mount", r"c:\mountain"]
+        ),
+        Some(r"c:\mount".to_string())
+    );
+    assert_eq!(
+        select_best_mount_key_for_target_for_test(r"c:\mountain\child", &[r"c:\mount"]),
+        None
+    );
+    assert_eq!(
+        select_best_mount_key_for_target_for_test(r"c:\mount", &[r"c:\mount"]),
+        Some(r"c:\mount".to_string())
+    );
 }
 
 fn empty_report() -> serde_json::Value {

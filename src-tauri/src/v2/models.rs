@@ -222,6 +222,7 @@ pub struct DuplicateCleanupReport {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct LargeFileScanRequest {
     pub selected_drives: Vec<String>,
     pub custom_folders: Vec<String>,

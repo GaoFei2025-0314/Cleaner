@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -74,6 +74,26 @@ pub fn target_conflicts_with_backend_protected_paths_for_test(
     backend_protected_paths: &[String],
 ) -> Result<(), String> {
     reject_protected_target(target_folder, backend_protected_paths)
+}
+
+#[doc(hidden)]
+pub fn copy_file_to_temp_with_cleanup_for_test<F>(
+    source: &Path,
+    temp_path: &Path,
+    copy_file: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&Path, &Path) -> io::Result<u64>,
+{
+    copy_file_to_temp_with_cleanup(source, temp_path, copy_file).map_err(|_| "复制失败".to_string())
+}
+
+#[doc(hidden)]
+pub fn select_best_mount_key_for_target_for_test(
+    target_key: &str,
+    mount_keys: &[&str],
+) -> Option<String> {
+    select_best_mount_key_for_target(target_key, mount_keys.iter().copied())
 }
 
 #[doc(hidden)]
@@ -366,7 +386,10 @@ fn migrate_one_item(
         .ok_or_else(|| ItemFailure::Failed("无法生成临时文件名".to_string()))?;
 
     check_cancelled(cancelled).map_err(|_| ItemFailure::Cancelled)?;
-    fs::copy(&entry.path, &temp_path).map_err(|_| ItemFailure::Failed("复制失败".to_string()))?;
+    copy_file_to_temp_with_cleanup(&entry.path, &temp_path, |source, target| {
+        fs::copy(source, target)
+    })
+    .map_err(|_| ItemFailure::Failed("复制失败".to_string()))?;
     before_verify(&temp_path);
     if check_cancelled(cancelled).is_err() {
         remove_temp_copy(&temp_path);
@@ -584,16 +607,46 @@ fn key_is_same_or_child(path_key: &str, parent_key: &str) -> bool {
 fn ensure_available_space(target_folder: &Path, needed_bytes: u64) -> Result<(), String> {
     let disks = Disks::new_with_refreshed_list();
     let target_key = safe_target_path_key(target_folder);
+    let mut best_match: Option<(usize, u64)> = None;
     for disk in disks.iter() {
         let mount_key = normalized_existing_or_logical_path_key(disk.mount_point());
-        if !mount_key.is_empty() && target_key.starts_with(&mount_key) {
-            if disk.available_space() >= needed_bytes {
-                return Ok(());
+        if mount_key_matches_target(&target_key, &mount_key) {
+            let mount_len = mount_key.len();
+            if best_match
+                .map(|(best_len, _)| mount_len > best_len)
+                .unwrap_or(true)
+            {
+                best_match = Some((mount_len, disk.available_space()));
             }
+        }
+    }
+    if let Some((_, available_space)) = best_match {
+        if available_space < needed_bytes {
             return Err("目标磁盘空间不足".to_string());
         }
     }
     Ok(())
+}
+
+fn select_best_mount_key_for_target<'a>(
+    target_key: &str,
+    mount_keys: impl IntoIterator<Item = &'a str>,
+) -> Option<String> {
+    mount_keys
+        .into_iter()
+        .filter(|mount_key| mount_key_matches_target(target_key, mount_key))
+        .max_by_key(|mount_key| mount_key.len())
+        .map(|mount_key| mount_key.to_string())
+}
+
+fn mount_key_matches_target(target_key: &str, mount_key: &str) -> bool {
+    if mount_key.is_empty() {
+        return false;
+    }
+    target_key == mount_key
+        || target_key
+            .strip_prefix(mount_key)
+            .is_some_and(|tail| tail.starts_with('\\'))
 }
 
 fn unique_target_path(target_folder: &Path, source_path: &Path) -> Option<PathBuf> {
@@ -630,6 +683,23 @@ fn unique_temp_copy_path(target_folder: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn copy_file_to_temp_with_cleanup<F>(
+    source: &Path,
+    temp_path: &Path,
+    copy_file: F,
+) -> Result<(), ()>
+where
+    F: FnOnce(&Path, &Path) -> io::Result<u64>,
+{
+    match copy_file(source, temp_path) {
+        Ok(_) => Ok(()),
+        Err(_) => {
+            remove_temp_copy(temp_path);
+            Err(())
+        }
+    }
 }
 
 fn remove_temp_copy(path: &Path) {

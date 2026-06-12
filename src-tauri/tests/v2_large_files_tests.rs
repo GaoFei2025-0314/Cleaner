@@ -133,3 +133,18 @@ fn large_file_recommendation_is_limited_to_c_drive_user_profile_files() {
         true
     ));
 }
+
+#[test]
+fn large_file_scan_request_rejects_unknown_path_fields() {
+    let payload = serde_json::json!({
+        "selectedDrives": [],
+        "customFolders": [],
+        "minSizeBytes": 20,
+        "protectedPaths": [],
+        "skipSystemDirs": true,
+        "skipProgramDirs": true,
+        "rawPath": "C:\\Users\\Alice\\Downloads"
+    });
+
+    assert!(serde_json::from_value::<LargeFileScanRequest>(payload).is_err());
+}
