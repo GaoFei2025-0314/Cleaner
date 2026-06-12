@@ -17,6 +17,7 @@ use crate::paths::{
 };
 use crate::processes::find_process_references;
 use crate::rules::builtin_rules;
+use crate::v2::recycle_bin::{RecycleBin, RecycleBinError, SystemRecycleBin};
 
 pub fn validate_high_risk_confirmation(
     selection: &CleanupSelection,
@@ -99,10 +100,88 @@ pub fn delete_path_or_contents(path: &Path, contents_only: bool) -> Result<u64, 
     Ok(freed)
 }
 
+pub fn recycle_path_contents(
+    path: &Path,
+    recycle_bin: &impl RecycleBin,
+) -> Result<u64, CleanerError> {
+    let mut freed = 0;
+    if !path.exists() {
+        return Ok(0);
+    }
+    if is_link_or_reparse_point(path)? {
+        return Err(CleanerError::PathResolution(
+            "refusing to move a link or reparse point to recycle bin".to_string(),
+        ));
+    }
+
+    let root = path.canonicalize()?;
+
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let child = entry.path();
+        if is_link_or_reparse_point(&child)? {
+            continue;
+        }
+        let child_root = match child.canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if !child_root.starts_with(&root) {
+            return Err(CleanerError::PathOutsideAllowedRoot);
+        }
+        let size = crate::size::path_size_bytes(&child);
+        recycle_bin
+            .move_to_recycle_bin(&child)
+            .map_err(recycle_bin_error)?;
+        freed += size;
+    }
+
+    Ok(freed)
+}
+
+pub fn recycle_path_or_contents(
+    path: &Path,
+    contents_only: bool,
+    recycle_bin: &impl RecycleBin,
+) -> Result<u64, CleanerError> {
+    if contents_only {
+        return recycle_path_contents(path, recycle_bin);
+    }
+
+    if !path.exists() {
+        return Ok(0);
+    }
+    if is_link_or_reparse_point(path)? {
+        return Err(CleanerError::PathResolution(
+            "refusing to move a link or reparse point to recycle bin".to_string(),
+        ));
+    }
+    let freed = crate::size::path_size_bytes(path);
+    recycle_bin
+        .move_to_recycle_bin(path)
+        .map_err(recycle_bin_error)?;
+    Ok(freed)
+}
+
+fn recycle_bin_error(error: RecycleBinError) -> CleanerError {
+    CleanerError::RecycleBin(error.to_string())
+}
+
 pub fn execute_selected_cleanup(
     selection: &CleanupSelection,
     items: &[ScanItem],
     roots: &ScanRoots,
+) -> Result<CleanupResult, String> {
+    let recycle_bin = SystemRecycleBin;
+    execute_selected_cleanup_with_recycle_bin(selection, items, roots, &recycle_bin)
+}
+
+pub fn execute_selected_cleanup_with_recycle_bin(
+    selection: &CleanupSelection,
+    items: &[ScanItem],
+    roots: &ScanRoots,
+    recycle_bin: &impl RecycleBin,
 ) -> Result<CleanupResult, String> {
     validate_high_risk_confirmation(selection, items)?;
     let rules = builtin_rules();
@@ -251,18 +330,18 @@ pub fn execute_selected_cleanup(
             continue;
         }
 
-        match delete_path_or_contents(&expected_path, rule.delete_contents_only) {
+        match recycle_path_or_contents(&expected_path, rule.delete_contents_only, recycle_bin) {
             Ok(freed) => results.push(CleanupItemResult {
                 item_id: item.id.clone(),
                 status: "deleted".to_string(),
                 freed_bytes: freed,
-                message: format!("{} 已清理。", item.title),
+                message: format!("{} 已移入回收站。", item.title),
             }),
-            Err(error) => results.push(CleanupItemResult {
+            Err(_error) => results.push(CleanupItemResult {
                 item_id: item.id.clone(),
                 status: "failed".to_string(),
                 freed_bytes: 0,
-                message: format!("{} 清理失败：{}。", item.title, error),
+                message: format!("{} 移入回收站失败，本项未清理。", item.title),
             }),
         }
     }
