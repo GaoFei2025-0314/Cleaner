@@ -3,6 +3,7 @@ import type { CleanupResult, ScanReport } from "./domain/models";
 import { buildDefaultSelection, highRiskSelectionChanged } from "./domain/selection";
 import { executeCleanup, scanCDrive } from "./services/tauriApi";
 import { AppShell } from "./components/AppShell";
+import { SidebarShell, type CleanerModule } from "./components/SidebarShell";
 import { WelcomeStep } from "./components/WelcomeStep";
 import { ScanStep } from "./components/ScanStep";
 import { SuggestionsStep } from "./components/SuggestionsStep";
@@ -10,6 +11,8 @@ import { ConfirmStep } from "./components/ConfirmStep";
 import { CleanStep } from "./components/CleanStep";
 import { ResultStep } from "./components/ResultStep";
 import { ErrorPanel } from "./components/ErrorPanel";
+import { SettingsPage } from "./components/settings/SettingsPage";
+import { HistoryPage } from "./components/history/HistoryPage";
 
 type Step = "welcome" | "scan" | "suggestions" | "confirm" | "clean" | "result";
 type FailedAction = "scan" | "clean";
@@ -24,6 +27,7 @@ const stepIndex: Record<Step, number> = {
 };
 
 export default function App() {
+  const [activeModule, setActiveModule] = useState<CleanerModule>("cDrive");
   const [step, setStep] = useState<Step>("welcome");
   const [report, setReport] = useState<ScanReport | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -117,7 +121,7 @@ export default function App() {
     setSelectedIds(nextIds);
   }
 
-  return (
+  const cDriveWorkflow = (
     <AppShell currentStep={stepIndex[step]} report={report}>
       {errorMessage && (
         <ErrorPanel
@@ -160,6 +164,37 @@ export default function App() {
       {step === "clean" && <CleanStep progress={cleanProgress} />}
       {step === "result" && result && <ResultStep result={result} onRestart={restart} />}
     </AppShell>
+  );
+
+  return (
+    <SidebarShell
+      activeModule={activeModule}
+      hasBlockingWork={step === "scan" || step === "clean"}
+      onModuleChange={setActiveModule}
+    >
+      {activeModule === "cDrive" && cDriveWorkflow}
+      {activeModule === "duplicate" && <PlaceholderPage title="重复文件清理" />}
+      {activeModule === "largeFiles" && <PlaceholderPage title="大文件迁移" />}
+      {activeModule === "privacy" && (
+        <div className="tool-page placeholder-page">
+          <p className="eyebrow">Privacy</p>
+          <h2>隐私清理</h2>
+          <p>隐私清理将在 V0.3 提供</p>
+        </div>
+      )}
+      {activeModule === "history" && <HistoryPage />}
+      {activeModule === "settings" && <SettingsPage />}
+    </SidebarShell>
+  );
+}
+
+function PlaceholderPage({ title }: { title: string }) {
+  return (
+    <div className="tool-page placeholder-page">
+      <p className="eyebrow">V0.2</p>
+      <h2>{title}</h2>
+      <p>将在 V0.2 后续步骤接入</p>
+    </div>
   );
 }
 

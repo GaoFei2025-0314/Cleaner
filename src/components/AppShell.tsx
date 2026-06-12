@@ -1,4 +1,5 @@
 import { ShieldCheck } from "lucide-react";
+import type { ReactNode } from "react";
 import type { ScanReport } from "../domain/models";
 import { StepIndicator } from "./StepIndicator";
 
@@ -11,18 +12,21 @@ export function AppShell({
 }: {
   currentStep: number;
   report: ScanReport | null;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
-    <main className="app-frame">
-      <aside className="app-sidebar">
+    <div className="cdrive-workflow">
+      <header className="workflow-header">
         <div className="brand-mark">
           <img alt="Cleaner logo" className="cleaner-logo" src={cleanerLogoUrl} />
         </div>
         <div className="brand-copy">
-          <p className="eyebrow">Cleaner</p>
-          <h1>磁盘清理控制台</h1>
+          <p className="eyebrow">C Drive</p>
+          <h1>C 盘清理</h1>
         </div>
+      </header>
+
+      <section className="workflow-status">
         <StepIndicator currentStep={currentStep} />
         <section className="drive-panel">
           <div>
@@ -38,9 +42,10 @@ export function AppShell({
           <ShieldCheck size={18} />
           <span>普通模式运行，清理前逐项复查。</span>
         </div>
-      </aside>
+      </section>
+
       <section className="app-workspace">{children}</section>
-    </main>
+    </div>
   );
 }
 
