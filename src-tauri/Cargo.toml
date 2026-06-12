@@ -1,8 +1,8 @@
 [package]
 name = "c-drive-cleaner"
 version = "0.1.0"
-description = "Safe local Windows C drive cleaner"
-authors = ["C Drive Cleaner"]
+description = "Safe local Windows disk cleaner"
+authors = ["Cleaner"]
 edition = "2021"
 
 [lib]

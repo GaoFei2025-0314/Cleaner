@@ -1,6 +1,6 @@
-# C Drive Cleaner
+# Cleaner
 
-Windows-only local desktop app plan for safely scanning and cleaning the C drive.
+Cleaner is a Windows-only local desktop app plan for safely scanning and cleaning disks, with C drive cleanup as the primary scenario.
 
 ## Version
 

@@ -18,8 +18,8 @@ export function AppShell({
           <HardDrive size={22} />
         </div>
         <div className="brand-copy">
-          <p className="eyebrow">C Drive Cleaner</p>
-          <h1>C 盘清理控制台</h1>
+          <p className="eyebrow">Cleaner</p>
+          <h1>磁盘清理控制台</h1>
         </div>
         <StepIndicator currentStep={currentStep} />
         <section className="drive-panel">
