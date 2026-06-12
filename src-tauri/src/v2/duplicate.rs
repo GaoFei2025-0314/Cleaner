@@ -304,17 +304,41 @@ pub fn run_duplicate_cleanup_with_recycle_bin(
     registry: &DuplicateEntryRegistry,
     recycle_bin: &impl RecycleBin,
 ) -> DuplicateCleanupReport {
-    run_duplicate_cleanup_internal(request, registry, recycle_bin, None)
+    run_duplicate_cleanup_internal(request, registry, recycle_bin, &[], None, |_| {})
         .unwrap_or_else(|report| report)
+}
+
+#[doc(hidden)]
+pub fn run_duplicate_cleanup_cancellable_for_test<F>(
+    request: DuplicateCleanupRequest,
+    registry: &DuplicateEntryRegistry,
+    recycle_bin: &impl RecycleBin,
+    cancelled: &AtomicBool,
+    backend_protected_paths: &[String],
+    before_selected_fingerprint: F,
+) -> Result<DuplicateCleanupReport, String>
+where
+    F: FnMut(&Path),
+{
+    run_duplicate_cleanup_internal(
+        request,
+        registry,
+        recycle_bin,
+        backend_protected_paths,
+        Some(cancelled),
+        before_selected_fingerprint,
+    )
+    .map_err(|_| "操作已取消".to_string())
 }
 
 fn run_duplicate_cleanup_internal(
     request: DuplicateCleanupRequest,
     registry: &DuplicateEntryRegistry,
     recycle_bin: &impl RecycleBin,
+    backend_protected_paths: &[String],
     cancelled: Option<&AtomicBool>,
+    mut before_selected_fingerprint: impl FnMut(&Path),
 ) -> Result<DuplicateCleanupReport, DuplicateCleanupReport> {
-    let protected_paths = request.protected_paths.clone();
     let protected_override_confirmed = request.protected_override_confirmed;
     let mut report = DuplicateCleanupReport {
         processed_files: 0,
@@ -394,25 +418,32 @@ fn run_duplicate_cleanup_internal(
             }
             if (file.request_protected
                 || file.entry.protected
-                || is_protected_duplicate_path(path, &protected_paths))
+                || is_protected_duplicate_path(path, backend_protected_paths))
                 && !protected_override_confirmed
             {
                 report.skipped_count += 1;
                 continue;
             }
 
-            let Ok((size_bytes, hash)) = file_fingerprint(path) else {
-                report.failed_count += 1;
-                continue;
+            before_selected_fingerprint(path);
+            let (size_bytes, hash) = match file_fingerprint_with_cancel(path, cancelled) {
+                Ok(fingerprint) => fingerprint,
+                Err(_) if cancellation_requested(cancelled) => return Err(report),
+                Err(_) => {
+                    report.failed_count += 1;
+                    continue;
+                }
             };
-            let retained_fingerprints = retained
-                .iter()
-                .filter_map(|entry| {
-                    file_fingerprint(&entry.entry.path)
-                        .ok()
-                        .map(|fingerprint| (entry.entry.path_key.clone(), fingerprint))
-                })
-                .collect::<Vec<_>>();
+            let mut retained_fingerprints = Vec::new();
+            for entry in &retained {
+                match file_fingerprint_with_cancel(&entry.entry.path, cancelled) {
+                    Ok(fingerprint) => {
+                        retained_fingerprints.push((entry.entry.path_key.clone(), fingerprint));
+                    }
+                    Err(_) if cancellation_requested(cancelled) => return Err(report),
+                    Err(_) => {}
+                }
+            }
             if !retained_fingerprints.iter().any(|(retained_path_key, fingerprint)| {
                 retained_path_key != &file.entry.path_key && fingerprint == &(size_bytes, hash.clone())
             }) {
@@ -554,13 +585,18 @@ pub fn start_duplicate_cleanup(
                 )
             } else {
                 let started_at = now_rfc3339();
+                let backend_protected_paths = crate::v2::settings::get_cleaner_settings(&app_handle)
+                    .map(|settings| settings.protected_paths)
+                    .unwrap_or_default();
                 let cleanup_result = {
                     let registry = app_handle.state::<DuplicateEntryRegistry>();
                     run_duplicate_cleanup_internal(
                         request,
                         &registry,
                         &SystemRecycleBin,
+                        &backend_protected_paths,
                         Some(&cancelled),
+                        |_| {},
                     )
                 };
                 let cancelled_after_cleanup = cancelled.load(Ordering::Relaxed);
@@ -854,10 +890,6 @@ fn reclaimable_totals(groups: &[DuplicateFileGroup]) -> (u64, u64, u64) {
     (total, c_drive, other_drive)
 }
 
-fn hash_file(path: &Path) -> Result<String, String> {
-    hash_file_with_cancel(path, None)
-}
-
 fn hash_file_with_cancel(path: &Path, cancelled: Option<&AtomicBool>) -> Result<String, String> {
     let mut file = fs::File::open(path).map_err(|_| "无法读取重复文件".to_string())?;
     let mut hasher = Sha256::new();
@@ -889,9 +921,13 @@ fn cancellation_requested(cancelled: Option<&AtomicBool>) -> bool {
         .unwrap_or(false)
 }
 
-fn file_fingerprint(path: &Path) -> Result<(u64, String), String> {
+fn file_fingerprint_with_cancel(
+    path: &Path,
+    cancelled: Option<&AtomicBool>,
+) -> Result<(u64, String), String> {
+    check_cancelled(cancelled)?;
     let metadata = fs::metadata(path).map_err(|_| "无法读取重复文件".to_string())?;
-    Ok((metadata.len(), hash_file(path)?))
+    Ok((metadata.len(), hash_file_with_cancel(path, cancelled)?))
 }
 
 fn visible_location_hint(path: &Path) -> String {

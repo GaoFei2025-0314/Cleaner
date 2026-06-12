@@ -185,14 +185,15 @@ pub struct DuplicateFileEntry {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct DuplicateCleanupRequest {
     pub groups: Vec<DuplicateCleanupGroupRequest>,
-    pub protected_paths: Vec<String>,
     pub protected_override_confirmed: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct DuplicateCleanupGroupRequest {
     pub group_id: String,
     pub files: Vec<DuplicateCleanupFileRequest>,
@@ -200,6 +201,7 @@ pub struct DuplicateCleanupGroupRequest {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct DuplicateCleanupFileRequest {
     pub entry_id: String,
     pub selected: bool,

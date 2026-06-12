@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use c_drive_cleaner::v2::duplicate::{
     apply_duplicate_recommendations, run_duplicate_cleanup_with_recycle_bin,
-    scan_duplicate_files, scan_duplicate_files_cancellable_for_test,
+    run_duplicate_cleanup_cancellable_for_test, scan_duplicate_files,
+    scan_duplicate_files_cancellable_for_test,
     scan_duplicate_files_with_before_hash_for_test, DuplicateEntryRegistry,
 };
 use c_drive_cleaner::v2::models::{
@@ -172,7 +173,6 @@ fn cleanup_wire_model_uses_entry_ids_not_raw_paths() {
                 protected: false,
             }],
         }],
-        protected_paths: vec![],
         protected_override_confirmed: false,
     };
 
@@ -180,6 +180,21 @@ fn cleanup_wire_model_uses_entry_ids_not_raw_paths() {
 
     assert!(encoded.contains("entryId"));
     assert!(!encoded.contains("\"path\""));
+    assert!(!encoded.contains("protectedPaths"));
+
+    let decoded: DuplicateCleanupRequest = serde_json::from_str(
+        r#"{"groups":[],"protectedOverrideConfirmed":false}"#,
+    )
+    .unwrap();
+    assert!(decoded.groups.is_empty());
+    assert!(serde_json::from_str::<DuplicateCleanupRequest>(
+        r#"{"groups":[],"protectedPaths":["C:\\Secret"],"protectedOverrideConfirmed":false}"#,
+    )
+    .is_err());
+    assert!(serde_json::from_str::<DuplicateCleanupRequest>(
+        r#"{"groups":[{"groupId":"g","files":[{"path":"C:\\secret.txt","selected":true,"protected":false}]}],"protectedOverrideConfirmed":false}"#,
+    )
+    .is_err());
 }
 
 #[test]
@@ -233,7 +248,6 @@ fn cleanup_skips_when_same_entry_is_selected_and_retained() {
                     },
                 ],
             }],
-            protected_paths: vec![],
             protected_override_confirmed: false,
         },
         &registry,
@@ -275,7 +289,6 @@ fn cleanup_skips_when_retained_duplicate_disappears() {
                     },
                 ],
             }],
-            protected_paths: vec![],
             protected_override_confirmed: false,
         },
         &registry,
@@ -284,6 +297,93 @@ fn cleanup_skips_when_retained_duplicate_disappears() {
 
     assert_eq!(report.success_count, 0);
     assert_eq!(report.skipped_count, 1);
+    assert!(recycle_bin.paths.lock().unwrap().is_empty());
+}
+
+#[test]
+fn cleanup_skips_registry_protected_entry_without_client_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let selected = temp.path().join("selected.txt");
+    let retained = temp.path().join("retained.txt");
+    fs::write(&selected, b"same").unwrap();
+    fs::write(&retained, b"same").unwrap();
+    let registry = DuplicateEntryRegistry::default();
+    registry.register_test_entry("group-1", "selected", &selected, true);
+    registry.register_test_entry("group-1", "retained", &retained, false);
+    let recycle_bin = RecordingRecycleBin::default();
+
+    let report = run_duplicate_cleanup_with_recycle_bin(
+        DuplicateCleanupRequest {
+            groups: vec![DuplicateCleanupGroupRequest {
+                group_id: "group-1".to_string(),
+                files: vec![
+                    DuplicateCleanupFileRequest {
+                        entry_id: "selected".to_string(),
+                        selected: true,
+                        protected: false,
+                    },
+                    DuplicateCleanupFileRequest {
+                        entry_id: "retained".to_string(),
+                        selected: false,
+                        protected: false,
+                    },
+                ],
+            }],
+            protected_override_confirmed: false,
+        },
+        &registry,
+        &recycle_bin,
+    );
+
+    assert_eq!(report.success_count, 0);
+    assert_eq!(report.skipped_count, 1);
+    assert!(recycle_bin.paths.lock().unwrap().is_empty());
+}
+
+#[test]
+fn cleanup_cancellation_before_selected_hash_prevents_recycle_move() {
+    let temp = tempfile::tempdir().unwrap();
+    let selected = temp.path().join("selected.txt");
+    let retained = temp.path().join("retained.txt");
+    fs::write(&selected, b"same").unwrap();
+    fs::write(&retained, b"same").unwrap();
+    let registry = DuplicateEntryRegistry::default();
+    registry.register_test_entry("group-1", "selected", &selected, false);
+    registry.register_test_entry("group-1", "retained", &retained, false);
+    let recycle_bin = RecordingRecycleBin::default();
+    let cancelled = AtomicBool::new(false);
+
+    let result = run_duplicate_cleanup_cancellable_for_test(
+        DuplicateCleanupRequest {
+            groups: vec![DuplicateCleanupGroupRequest {
+                group_id: "group-1".to_string(),
+                files: vec![
+                    DuplicateCleanupFileRequest {
+                        entry_id: "selected".to_string(),
+                        selected: true,
+                        protected: false,
+                    },
+                    DuplicateCleanupFileRequest {
+                        entry_id: "retained".to_string(),
+                        selected: false,
+                        protected: false,
+                    },
+                ],
+            }],
+            protected_override_confirmed: false,
+        },
+        &registry,
+        &recycle_bin,
+        &cancelled,
+        &[],
+        |path| {
+            if path.file_name().and_then(|name| name.to_str()) == Some("selected.txt") {
+                cancelled.store(true, Ordering::Relaxed);
+            }
+        },
+    );
+
+    assert_eq!(result.unwrap_err(), "操作已取消");
     assert!(recycle_bin.paths.lock().unwrap().is_empty());
 }
 
