@@ -14,6 +14,7 @@ pub mod v2;
 
 use models::{CleanupResult, CleanupSelection, ScanReport};
 use paths::ScanRoots;
+use v2::models::{CleanerSettings, HistoryEntry};
 use v2::operations::OperationRegistry;
 
 #[tauri::command]
@@ -41,6 +42,29 @@ fn cancel_operation(operation_id: String, operations: tauri::State<'_, Operation
     operations.cancel(&operation_id)
 }
 
+#[tauri::command]
+fn get_cleaner_settings(app_handle: tauri::AppHandle) -> Result<CleanerSettings, String> {
+    v2::settings::get_cleaner_settings(&app_handle)
+}
+
+#[tauri::command]
+fn save_cleaner_settings(
+    app_handle: tauri::AppHandle,
+    settings: CleanerSettings,
+) -> Result<CleanerSettings, String> {
+    v2::settings::save_cleaner_settings(&app_handle, settings)
+}
+
+#[tauri::command]
+fn list_operation_history(app_handle: tauri::AppHandle) -> Result<Vec<HistoryEntry>, String> {
+    v2::history::list_operation_history(&app_handle)
+}
+
+#[tauri::command]
+fn clear_operation_history(app_handle: tauri::AppHandle) -> Result<(), String> {
+    v2::history::clear_operation_history(&app_handle)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(OperationRegistry::default())
@@ -48,7 +72,11 @@ pub fn run() {
             ping,
             scan_c_drive,
             execute_cleanup,
-            cancel_operation
+            cancel_operation,
+            get_cleaner_settings,
+            save_cleaner_settings,
+            list_operation_history,
+            clear_operation_history
         ])
         .run(tauri::generate_context!())
         .expect("failed to run C Drive Cleaner");
