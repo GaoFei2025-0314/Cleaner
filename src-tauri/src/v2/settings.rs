@@ -1,6 +1,6 @@
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Manager};
 
@@ -40,7 +40,10 @@ pub fn sanitize_custom_extensions(input: &str) -> Vec<String> {
 
 pub fn get_cleaner_settings(app_handle: &AppHandle) -> Result<CleanerSettings, String> {
     let settings_path = settings_file_path(app_handle)?;
+    get_cleaner_settings_at_path(&settings_path)
+}
 
+pub fn get_cleaner_settings_at_path(settings_path: &Path) -> Result<CleanerSettings, String> {
     match fs::read_to_string(settings_path) {
         Ok(content) if content.trim().is_empty() => Ok(default_settings()),
         Ok(content) => serde_json::from_str(&content).map_err(|_| "设置文件格式无效".to_string()),
@@ -54,11 +57,18 @@ pub fn save_cleaner_settings(
     settings: CleanerSettings,
 ) -> Result<CleanerSettings, String> {
     let settings_path = settings_file_path(app_handle)?;
-    let app_data_dir = settings_path
-        .parent()
-        .ok_or_else(|| "无法访问应用数据目录".to_string())?;
-    fs::create_dir_all(app_data_dir).map_err(|_| "无法保存清理设置".to_string())?;
+    save_cleaner_settings_at_path(&settings_path, settings)
+}
 
+pub fn save_cleaner_settings_at_path(
+    settings_path: &Path,
+    settings: CleanerSettings,
+) -> Result<CleanerSettings, String> {
+    if let Some(parent) = settings_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|_| "无法保存清理设置".to_string())?;
+        }
+    }
     let content =
         serde_json::to_string_pretty(&settings).map_err(|_| "无法保存清理设置".to_string())?;
     fs::write(settings_path, content).map_err(|_| "无法保存清理设置".to_string())?;
