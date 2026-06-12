@@ -10,9 +10,11 @@ pub mod processes;
 pub mod rules;
 pub mod scan;
 pub mod size;
+pub mod v2;
 
 use models::{CleanupResult, CleanupSelection, ScanReport};
 use paths::ScanRoots;
+use v2::operations::OperationRegistry;
 
 #[tauri::command]
 fn ping() -> &'static str {
@@ -34,9 +36,20 @@ fn execute_cleanup(selection: CleanupSelection) -> Result<CleanupResult, String>
     cleanup::execute_selected_cleanup(&selection, &report.items, &roots)
 }
 
+#[tauri::command]
+fn cancel_operation(operation_id: String, operations: tauri::State<'_, OperationRegistry>) -> bool {
+    operations.cancel(&operation_id)
+}
+
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![ping, scan_c_drive, execute_cleanup])
+        .manage(OperationRegistry::default())
+        .invoke_handler(tauri::generate_handler![
+            ping,
+            scan_c_drive,
+            execute_cleanup,
+            cancel_operation
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run C Drive Cleaner");
 }
