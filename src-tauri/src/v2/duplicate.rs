@@ -812,16 +812,9 @@ pub fn start_duplicate_cleanup(
                     );
                 }
 
-                emit_progress(
+                emit_progress_payload(
                     &app_handle,
-                    &operation_id_for_thread,
-                    OperationModule::DuplicateCleanup,
-                    "finished",
-                    100,
-                    0,
-                    0,
-                    0,
-                    report.freed_bytes,
+                    cleanup_finished_progress_payload(&operation_id_for_thread, &report),
                 );
                 (
                     if cancelled_after_cleanup {
@@ -1308,6 +1301,37 @@ fn progress_payload(
         skipped_count,
         failed_count,
     }
+}
+
+fn cleanup_finished_progress_payload(
+    operation_id: &str,
+    report: &DuplicateCleanupReport,
+) -> OperationProgressPayload {
+    let mut payload = progress_payload(
+        operation_id,
+        OperationModule::DuplicateCleanup,
+        "finished",
+        99,
+        String::new(),
+        0,
+        0,
+        0,
+        report.freed_bytes,
+        report.processed_files,
+        report.success_count,
+        report.skipped_count,
+        report.failed_count,
+    );
+    payload.percent = 100;
+    payload
+}
+
+#[doc(hidden)]
+pub fn cleanup_finished_progress_for_test(
+    operation_id: &str,
+    report: &DuplicateCleanupReport,
+) -> OperationProgressPayload {
+    cleanup_finished_progress_payload(operation_id, report)
 }
 
 fn emit_progress_payload(app_handle: &AppHandle, payload: OperationProgressPayload) {

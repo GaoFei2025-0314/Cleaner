@@ -12,8 +12,9 @@ use c_drive_cleaner::v2::duplicate::{
     DuplicateEntryRegistry,
 };
 use c_drive_cleaner::v2::models::{
-    DuplicateCleanupFileRequest, DuplicateCleanupGroupRequest, DuplicateCleanupRequest,
-    DuplicateFileType, DuplicateRecommendedAction, DuplicateScanRequest, OperationProgressPayload,
+    DuplicateCleanupFileRequest, DuplicateCleanupGroupRequest, DuplicateCleanupReport,
+    DuplicateCleanupRequest, DuplicateFileType, DuplicateRecommendedAction, DuplicateScanRequest,
+    OperationModule, OperationProgressPayload,
 };
 use c_drive_cleaner::v2::path_safety::{
     is_protected_duplicate_path, should_skip_scan_location,
@@ -190,6 +191,14 @@ fn built_in_protected_paths_are_marked_protected_but_not_hidden_from_scan() {
     assert!(!should_skip_scan_location(
         Path::new(r"C:\Windows"),
         &[]
+    ));
+}
+
+#[test]
+fn verbatim_unc_paths_match_configured_unc_protected_paths() {
+    assert!(is_protected_duplicate_path(
+        Path::new(r"\\?\UNC\server\share\folder\file.txt"),
+        &[r"\\server\share".to_string()]
     ));
 }
 
@@ -543,6 +552,32 @@ fn cleanup_progress_callback_reports_counts_without_full_paths() {
             .current_location_hint
             .contains(&temp.path().display().to_string())
     }));
+}
+
+#[test]
+fn final_cleanup_progress_preserves_report_counts() {
+    let payload = c_drive_cleaner::v2::duplicate::cleanup_finished_progress_for_test(
+        "operation-1",
+        &DuplicateCleanupReport {
+            processed_files: 3,
+            success_count: 1,
+            skipped_count: 1,
+            failed_count: 1,
+            freed_bytes: 42,
+            c_drive_freed_bytes: 42,
+            other_drive_freed_bytes: 0,
+        },
+    );
+
+    assert_eq!(payload.module, OperationModule::DuplicateCleanup);
+    assert_eq!(payload.stage, "finished");
+    assert_eq!(payload.percent, 100);
+    assert_eq!(payload.found_bytes, 42);
+    assert_eq!(payload.processed_items, 3);
+    assert_eq!(payload.success_count, 1);
+    assert_eq!(payload.skipped_count, 1);
+    assert_eq!(payload.failed_count, 1);
+    assert!(payload.current_location_hint.is_empty());
 }
 
 #[test]

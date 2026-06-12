@@ -76,6 +76,13 @@ fn normalized_string_key(path: &str) -> String {
         .replace('/', "\\")
         .to_ascii_lowercase();
 
+    if let Some(remainder) = normalized
+        .strip_prefix(r"\\?\unc\")
+        .or_else(|| normalized.strip_prefix(r"\??\unc\"))
+    {
+        return format!(r"\\{remainder}");
+    }
+
     loop {
         let stripped = normalized
             .strip_prefix(r"\\?\")
