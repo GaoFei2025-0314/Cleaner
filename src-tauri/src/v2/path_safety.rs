@@ -17,8 +17,11 @@ pub fn is_protected_duplicate_path(path: &Path, protected_paths: &[String]) -> b
         })
 }
 
-pub fn should_skip_scan_location(path: &Path, protected_paths: &[String]) -> bool {
-    is_protected_duplicate_path(path, protected_paths)
+pub fn should_skip_scan_location(path: &Path, _protected_paths: &[String]) -> bool {
+    let path_key = normalized_path_key(path);
+    SYSTEM_PATHS
+        .iter()
+        .any(|system_path| path_is_same_or_child(&path_key, &normalized_string_key(system_path)))
 }
 
 pub fn selected_drive_to_root(drive: &str) -> Option<PathBuf> {

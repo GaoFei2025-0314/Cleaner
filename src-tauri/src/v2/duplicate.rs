@@ -39,6 +39,27 @@ struct CandidateFile {
 }
 
 pub fn scan_duplicate_files(request: DuplicateScanRequest) -> Result<DuplicateScanReport, String> {
+    scan_duplicate_files_with_before_hash(request, |_| {})
+}
+
+#[doc(hidden)]
+pub fn scan_duplicate_files_with_before_hash_for_test<F>(
+    request: DuplicateScanRequest,
+    before_hash: F,
+) -> Result<DuplicateScanReport, String>
+where
+    F: FnMut(&Path),
+{
+    scan_duplicate_files_with_before_hash(request, before_hash)
+}
+
+fn scan_duplicate_files_with_before_hash<F>(
+    request: DuplicateScanRequest,
+    mut before_hash: F,
+) -> Result<DuplicateScanReport, String>
+where
+    F: FnMut(&Path),
+{
     let scan_roots = scan_roots(&request);
     let allowed_extensions = allowed_extensions(&request.file_types, &request.custom_extensions);
     let mut skipped_locations = 0_u64;
@@ -117,7 +138,9 @@ pub fn scan_duplicate_files(request: DuplicateScanRequest) -> Result<DuplicateSc
         }
     }
 
-    let mut strict_groups = strict_duplicate_groups(&candidates_by_size)?;
+    let (mut strict_groups, skipped_hashes) =
+        strict_duplicate_groups(&candidates_by_size, &mut before_hash);
+    skipped_locations += skipped_hashes;
     for group in &mut strict_groups {
         apply_duplicate_recommendations(group, &request.protected_paths);
     }
@@ -481,15 +504,24 @@ fn extension_is_allowed(path: &Path, allowed_extensions: &Option<HashSet<String>
         .unwrap_or(false)
 }
 
-fn strict_duplicate_groups(
+fn strict_duplicate_groups<F>(
     candidates_by_size: &BTreeMap<u64, Vec<CandidateFile>>,
-) -> Result<Vec<DuplicateFileGroup>, String> {
+    before_hash: &mut F,
+) -> (Vec<DuplicateFileGroup>, u64)
+where
+    F: FnMut(&Path),
+{
     let mut groups = Vec::new();
+    let mut skipped_locations = 0_u64;
 
     for candidates in candidates_by_size.values().filter(|files| files.len() >= 2) {
         let mut by_hash: HashMap<String, Vec<CandidateFile>> = HashMap::new();
         for candidate in candidates {
-            let hash = hash_file(&candidate.path)?;
+            before_hash(&candidate.path);
+            let Ok(hash) = hash_file(&candidate.path) else {
+                skipped_locations += 1;
+                continue;
+            };
             by_hash.entry(hash).or_default().push(candidate.clone());
         }
 
@@ -513,7 +545,7 @@ fn strict_duplicate_groups(
         }
     }
 
-    Ok(groups)
+    (groups, skipped_locations)
 }
 
 fn suspected_duplicate_groups(candidates: Vec<CandidateFile>) -> Vec<DuplicateFileGroup> {
