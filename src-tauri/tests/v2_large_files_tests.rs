@@ -3,7 +3,7 @@ use std::path::Path;
 
 use c_drive_cleaner::v2::large_files::{
     large_file_is_recommended_for_test, large_file_should_skip_dir_for_test, scan_large_files,
-    visible_location_hint,
+    scan_large_files_with_backend_settings_for_test, visible_location_hint,
 };
 use c_drive_cleaner::v2::models::{LargeFileScanRequest, OperationModule};
 
@@ -75,6 +75,58 @@ fn protected_large_files_are_visible_but_not_recommended() {
     assert_eq!(report.items.len(), 1);
     assert!(report.items[0].protected);
     assert!(!report.items[0].recommended);
+}
+
+#[test]
+fn backend_protected_paths_mark_large_scan_items_when_request_omits_them() {
+    let temp = tempfile::tempdir().unwrap();
+    let protected_dir = temp.path().join("protected-root");
+    fs::create_dir_all(&protected_dir).unwrap();
+    let private_file_name = "Alice-private-video.mp4";
+    fs::write(protected_dir.join(private_file_name), vec![0u8; 20]).unwrap();
+
+    let report = scan_large_files_with_backend_settings_for_test(
+        LargeFileScanRequest {
+            selected_drives: vec![],
+            custom_folders: vec![protected_dir.to_string_lossy().to_string()],
+            min_size_bytes: 20,
+            protected_paths: vec![],
+            skip_system_dirs: true,
+            skip_program_dirs: true,
+        },
+        Ok(vec![protected_dir.to_string_lossy().to_string()]),
+    )
+    .unwrap();
+    let json = serde_json::to_string(&report).unwrap();
+
+    assert_eq!(report.items.len(), 1);
+    assert!(report.items[0].protected);
+    assert!(!report.items[0].recommended);
+    assert!(!json.contains(private_file_name));
+    assert!(!json.contains(&protected_dir.to_string_lossy().to_string()));
+    assert!(!json.contains("Alice"));
+}
+
+#[test]
+fn large_file_scan_settings_failure_returns_path_free_error() {
+    let temp = tempfile::tempdir().unwrap();
+    let error = scan_large_files_with_backend_settings_for_test(
+        LargeFileScanRequest {
+            selected_drives: vec![],
+            custom_folders: vec![temp.path().join("Alice").to_string_lossy().to_string()],
+            min_size_bytes: 20,
+            protected_paths: vec![],
+            skip_system_dirs: true,
+            skip_program_dirs: true,
+        },
+        Err(r"C:\Users\Alice\AppData\settings.json".to_string()),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("无法读取清理设置"));
+    assert!(!error.contains("Alice"));
+    assert!(!error.contains("settings.json"));
+    assert!(!error.contains(r"C:\Users"));
 }
 
 #[test]

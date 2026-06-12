@@ -103,6 +103,42 @@ where
     scan_large_files_internal(request, None, &mut progress, "test").map(|outcome| outcome.report)
 }
 
+#[doc(hidden)]
+pub fn scan_large_files_with_backend_settings_for_test(
+    request: LargeFileScanRequest,
+    backend_protected_paths: Result<Vec<String>, String>,
+) -> Result<LargeFileScanReport, String> {
+    let mut progress = |_| {};
+    scan_large_files_with_backend_settings(
+        request,
+        backend_protected_paths,
+        None,
+        &mut progress,
+        "test",
+    )
+    .map(|outcome| outcome.report)
+}
+
+fn scan_large_files_with_backend_settings<P>(
+    request: LargeFileScanRequest,
+    backend_protected_paths: Result<Vec<String>, String>,
+    cancelled: Option<&AtomicBool>,
+    progress: &mut P,
+    operation_id: &str,
+) -> Result<ScanOutcome, String>
+where
+    P: FnMut(OperationProgressPayload),
+{
+    let backend_protected_paths =
+        backend_protected_paths.map_err(|_| scan_settings_unavailable_error())?;
+    scan_large_files_internal(
+        request_with_backend_protected_paths(request, backend_protected_paths),
+        cancelled,
+        progress,
+        operation_id,
+    )
+}
+
 fn scan_large_files_internal<P>(
     request: LargeFileScanRequest,
     cancelled: Option<&AtomicBool>,
@@ -270,9 +306,12 @@ pub fn start_large_file_scan(
         let result = if cancelled.load(Ordering::Relaxed) {
             Err("操作已取消".to_string())
         } else {
+            let backend_protected_paths = crate::v2::settings::get_cleaner_settings(&app_handle)
+                .map(|settings| settings.protected_paths);
             let mut progress = |payload| emit_progress(&app_handle, payload);
-            scan_large_files_internal(
+            scan_large_files_with_backend_settings(
                 request,
+                backend_protected_paths,
                 Some(&cancelled),
                 &mut progress,
                 &operation_id_for_thread,
@@ -378,6 +417,27 @@ fn large_file_category_rank(category: &LargeFileCategory) -> u8 {
         LargeFileCategory::Document => 4,
         LargeFileCategory::Other => 5,
     }
+}
+
+fn request_with_backend_protected_paths(
+    mut request: LargeFileScanRequest,
+    backend_protected_paths: Vec<String>,
+) -> LargeFileScanRequest {
+    let mut seen = request
+        .protected_paths
+        .iter()
+        .cloned()
+        .collect::<HashSet<_>>();
+    for protected_path in backend_protected_paths {
+        if seen.insert(protected_path.clone()) {
+            request.protected_paths.push(protected_path);
+        }
+    }
+    request
+}
+
+fn scan_settings_unavailable_error() -> String {
+    "无法读取清理设置，扫描已停止".to_string()
 }
 
 pub fn visible_location_hint(path: &Path) -> String {

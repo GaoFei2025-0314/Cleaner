@@ -220,6 +220,57 @@ pub fn run_large_file_migration_with_backend_protected_paths_for_test(
     .unwrap_or_else(|report| report)
 }
 
+#[doc(hidden)]
+pub fn run_large_file_migration_with_backend_settings_for_test(
+    request: MigrationRequest,
+    registry: &LargeFileRegistry,
+    recycle_bin: &impl RecycleBin,
+    backend_protected_paths: Result<Vec<String>, String>,
+) -> Result<MigrationResult, String> {
+    let mut progress = |_| {};
+    run_large_file_migration_with_backend_settings(
+        request,
+        registry,
+        recycle_bin,
+        backend_protected_paths,
+        None,
+        |_| {},
+        |_| {},
+        &mut progress,
+        "test",
+    )
+    .map(|result| result.unwrap_or_else(|report| report))
+}
+
+fn run_large_file_migration_with_backend_settings<P>(
+    request: MigrationRequest,
+    registry: &LargeFileRegistry,
+    recycle_bin: &impl RecycleBin,
+    backend_protected_paths: Result<Vec<String>, String>,
+    cancelled: Option<&AtomicBool>,
+    before_recycle: impl FnMut(&Path),
+    before_verify: impl FnMut(&Path),
+    progress: &mut P,
+    operation_id: &str,
+) -> Result<Result<MigrationResult, MigrationResult>, String>
+where
+    P: FnMut(OperationProgressPayload),
+{
+    let backend_protected_paths =
+        backend_protected_paths.map_err(|_| migration_settings_unavailable_error())?;
+    Ok(run_large_file_migration_internal(
+        request,
+        registry,
+        recycle_bin,
+        &backend_protected_paths,
+        cancelled,
+        before_recycle,
+        before_verify,
+        progress,
+        operation_id,
+    ))
+}
+
 fn run_large_file_migration_internal<P>(
     request: MigrationRequest,
     registry: &LargeFileRegistry,
@@ -527,19 +578,50 @@ pub fn start_large_file_migration(
         let migration_result = {
             let registry = app_handle.state::<LargeFileRegistry>();
             let backend_protected_paths = crate::v2::settings::get_cleaner_settings(&app_handle)
-                .map(|settings| settings.protected_paths)
-                .unwrap_or_default();
-            run_large_file_migration_internal(
+                .map(|settings| settings.protected_paths);
+            run_large_file_migration_with_backend_settings(
                 request,
                 &registry,
                 &SystemRecycleBin,
-                &backend_protected_paths,
+                backend_protected_paths,
                 Some(&cancelled),
                 |_| {},
                 |_| {},
                 &mut progress,
                 &operation_id_for_thread,
             )
+        };
+        let migration_result = match migration_result {
+            Ok(migration_result) => migration_result,
+            Err(error) => {
+                progress(progress_payload(
+                    &operation_id_for_thread,
+                    OperationModule::LargeFileMigration,
+                    "finished",
+                    100,
+                    String::new(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                ));
+                emit_finished(
+                    &app_handle,
+                    &operation_id_for_thread,
+                    OperationModule::LargeFileMigration,
+                    OperationStatus::Failed,
+                    serde_json::Value::Null,
+                    Some(error),
+                );
+                app_handle
+                    .state::<OperationRegistry>()
+                    .finish(&operation_id_for_thread);
+                return;
+            }
         };
         let operation_status =
             migration_operation_status(&migration_result, cancelled.load(Ordering::Relaxed));
@@ -980,4 +1062,8 @@ fn migration_error_categories(report: &MigrationResult) -> Vec<String> {
         categories.push("无错误".to_string());
     }
     categories
+}
+
+fn migration_settings_unavailable_error() -> String {
+    "无法读取清理设置，迁移已停止".to_string()
 }

@@ -10,6 +10,7 @@ use c_drive_cleaner::v2::migration::{
     run_large_file_migration_cancellable_before_recycle_for_test,
     run_large_file_migration_cancellable_before_verify_for_test,
     run_large_file_migration_with_backend_protected_paths_for_test,
+    run_large_file_migration_with_backend_settings_for_test,
     run_large_file_migration_with_recycle_bin, select_best_mount_key_for_target_for_test,
     target_conflicts_with_backend_protected_paths_for_test, validate_migration_target,
 };
@@ -393,6 +394,33 @@ fn migration_skips_source_when_backend_protected_path_is_symlink() {
     assert_eq!(result.skipped_count, 1);
     assert_eq!(recycle_bin.moved_count(), 0);
     assert!(!target.join("movie.mp4").exists());
+}
+
+#[test]
+fn migration_settings_failure_fails_closed_without_copying() {
+    let temp = tempfile::tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    fs::create_dir_all(&source_dir).unwrap();
+    let source = source_dir.join("movie.mp4");
+    let target = temp.path().join("out");
+    fs::write(&source, b"movie-bytes").unwrap();
+    let registry = registry_with_item("item-1", &source, false);
+    let recycle_bin = RecordingRecycleBin::default();
+
+    let error = run_large_file_migration_with_backend_settings_for_test(
+        request_for("item-1", false, &target, OriginalFilePolicy::KeepOriginal),
+        &registry,
+        &recycle_bin,
+        Err(r"C:\Users\Alice\AppData\settings.json".to_string()),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("无法读取清理设置"));
+    assert!(!error.contains("Alice"));
+    assert!(!error.contains("settings.json"));
+    assert!(!error.contains(r"C:\Users"));
+    assert!(!target.exists());
+    assert_eq!(recycle_bin.moved_count(), 0);
 }
 
 #[test]
