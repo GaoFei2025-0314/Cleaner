@@ -45,7 +45,7 @@ export interface OperationFinishedPayload<T = unknown> {
   operationId: string;
   module: OperationModule;
   status: OperationStatus;
-  result: T;
+  result: T | null;
   message: string | null;
 }
 

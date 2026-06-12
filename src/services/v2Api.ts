@@ -87,11 +87,12 @@ export async function startDuplicateScanPreview(): Promise<DuplicateScanReport> 
   return cloneMock(mockDuplicateScanReport);
 }
 
-export async function startDuplicateScan(request = defaultDuplicateScanRequest()): Promise<OperationStart> {
+export async function startDuplicateScan(request?: DuplicateScanRequest): Promise<OperationStart> {
   if (isBrowserPreview) {
     return startBrowserOperation("duplicateScan", cloneMock(mockDuplicateScanReport));
   }
-  return invoke<OperationStart>("start_duplicate_scan", { request });
+  const effectiveRequest = request ?? defaultDuplicateScanRequest(await getCleanerSettings());
+  return invoke<OperationStart>("start_duplicate_scan", { request: effectiveRequest });
 }
 
 export async function startDuplicateCleanup(request: DuplicateCleanupRequest): Promise<OperationStart> {
@@ -101,11 +102,12 @@ export async function startDuplicateCleanup(request: DuplicateCleanupRequest): P
   return invoke<OperationStart>("start_duplicate_cleanup", { request });
 }
 
-export async function startLargeFileScan(request = defaultLargeFileScanRequest()): Promise<OperationStart> {
+export async function startLargeFileScan(request?: LargeFileScanRequest): Promise<OperationStart> {
   if (isBrowserPreview) {
     return startBrowserOperation("largeFileScan", cloneMock(mockLargeFileScanReport));
   }
-  return invoke<OperationStart>("start_large_file_scan", { request });
+  const effectiveRequest = request ?? defaultLargeFileScanRequest(await getCleanerSettings());
+  return invoke<OperationStart>("start_large_file_scan", { request: effectiveRequest });
 }
 
 export async function startLargeFileMigration(request: MigrationRequest): Promise<OperationStart> {
@@ -121,7 +123,7 @@ export async function cancelOperation(operationId: string): Promise<boolean> {
     if (!operation || operation.finished) {
       return false;
     }
-    finishBrowserOperation(operation, "cancelled", {}, "浏览器预览模式已取消操作。");
+    finishBrowserOperation(operation, "cancelled", null, "浏览器预览模式已取消操作。");
     return true;
   }
   return invoke<boolean>("cancel_operation", { operationId });
@@ -136,10 +138,10 @@ export async function onCleanerOperationProgress(listener: ProgressListener): Pr
     };
   }
 
-  const unlistenPromise = listen<OperationProgressPayload>(PROGRESS_EVENT, (event) => {
+  const unlisten = await listen<OperationProgressPayload>(PROGRESS_EVENT, (event) => {
     listener(event.payload);
   });
-  return stableUnsubscribe(unlistenPromise);
+  return stableUnsubscribe(unlisten);
 }
 
 export async function onCleanerOperationFinished(listener: FinishedListener): Promise<CleanerUnsubscribe> {
@@ -151,20 +153,19 @@ export async function onCleanerOperationFinished(listener: FinishedListener): Pr
     };
   }
 
-  const unlistenPromise = listen<OperationFinishedPayload>(FINISHED_EVENT, (event) => {
+  const unlisten = await listen<OperationFinishedPayload>(FINISHED_EVENT, (event) => {
     listener(event.payload);
   });
-  return stableUnsubscribe(unlistenPromise);
+  return stableUnsubscribe(unlisten);
 }
 
-function stableUnsubscribe(unlistenPromise: Promise<UnlistenFn>): CleanerUnsubscribe {
+function stableUnsubscribe(unlisten: UnlistenFn): CleanerUnsubscribe {
   let unsubscribed = false;
   return async () => {
     if (unsubscribed) {
       return;
     }
     unsubscribed = true;
-    const unlisten = await unlistenPromise;
     unlisten();
   };
 }
@@ -245,7 +246,7 @@ function browserProgressPayload(operation: BrowserOperation, percent: number): O
     module: operation.module,
     stage: percent === 100 ? "完成预览" : "浏览器预览扫描中",
     percent,
-    currentLocationHint: "C:\\...\\Preview",
+    currentLocationHint: "C drive / Preview",
     currentFileType: operation.module === "largeFileScan" ? "video" : "document",
     scannedFiles: Math.round(420 * (percent / 100)),
     foundGroups: Math.round(mockDuplicateScanReport.strictGroups.length * (percent / 100)),
@@ -258,7 +259,7 @@ function browserProgressPayload(operation: BrowserOperation, percent: number): O
   };
 }
 
-function defaultDuplicateScanRequest(): DuplicateScanRequest {
+function defaultDuplicateScanRequest(settings: CleanerSettings): DuplicateScanRequest {
   return {
     selectedDrives: ["C:"],
     customFolders: [],
@@ -266,16 +267,16 @@ function defaultDuplicateScanRequest(): DuplicateScanRequest {
     customExtensions: [],
     includeSuspected: true,
     minSizeBytes: 1,
-    protectedPaths: cloneMock(browserSettings.protectedPaths),
+    protectedPaths: cloneMock(settings.protectedPaths),
   };
 }
 
-function defaultLargeFileScanRequest(): LargeFileScanRequest {
+function defaultLargeFileScanRequest(settings: CleanerSettings): LargeFileScanRequest {
   return {
     selectedDrives: ["C:"],
     customFolders: [],
-    minSizeBytes: browserSettings.largeFileDefaultThresholdBytes,
-    protectedPaths: cloneMock(browserSettings.protectedPaths),
+    minSizeBytes: settings.largeFileDefaultThresholdBytes,
+    protectedPaths: cloneMock(settings.protectedPaths),
     skipSystemDirs: true,
     skipProgramDirs: true,
   };
