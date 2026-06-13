@@ -80,6 +80,8 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
   const mountedRef = useRef(true);
   const unsubscribeProgressRef = useRef<CleanerUnsubscribe | null>(null);
   const unsubscribeFinishedRef = useRef<CleanerUnsubscribe | null>(null);
+  const pendingProgressRef = useRef<OperationProgressPayload[]>([]);
+  const pendingFinishedRef = useRef<OperationFinishedPayload[]>([]);
 
   async function cleanupActiveOperation(cancelBackend: boolean) {
     const operationId = operationIdRef.current;
@@ -88,6 +90,8 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
     operationIdRef.current = null;
     unsubscribeProgressRef.current = null;
     unsubscribeFinishedRef.current = null;
+    pendingProgressRef.current = [];
+    pendingFinishedRef.current = [];
 
     await Promise.allSettled([
       unsubscribeProgress?.(),
@@ -102,6 +106,52 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
 
   function safelySetError(message: string) {
     if (mountedRef.current) setError(message);
+  }
+
+  function handleProgressEvent(expectedModule: OperationProgressPayload["module"], payload: OperationProgressPayload) {
+    if (!mountedRef.current || payload.module !== expectedModule) return;
+    const operationId = operationIdRef.current;
+    if (!operationId) {
+      pendingProgressRef.current = [...pendingProgressRef.current, payload];
+      return;
+    }
+    if (payload.operationId === operationId) {
+      setProgress(payload);
+    }
+  }
+
+  function handleFinishedEvent(expectedModule: OperationFinishedPayload["module"], payload: OperationFinishedPayload) {
+    if (!mountedRef.current || payload.module !== expectedModule) return;
+    const operationId = operationIdRef.current;
+    if (!operationId) {
+      pendingFinishedRef.current = [...pendingFinishedRef.current, payload];
+      return;
+    }
+    if (payload.operationId === operationId) {
+      void cleanupActiveOperation(false);
+      if (expectedModule === "largeFileScan") {
+        handleScanFinished(payload as OperationFinishedPayload<LargeFileScanReport>);
+      } else if (expectedModule === "largeFileMigration") {
+        handleMigrationFinished(payload as OperationFinishedPayload<MigrationResult>);
+      }
+    }
+  }
+
+  function flushPendingEvents(
+    expectedModule: OperationFinishedPayload["module"],
+    operationId: string,
+    onFinished: (payload: OperationFinishedPayload) => void,
+  ) {
+    const matchingProgress = pendingProgressRef.current.filter((payload) => payload.module === expectedModule && payload.operationId === operationId);
+    const matchingFinished = pendingFinishedRef.current.find((payload) => payload.module === expectedModule && payload.operationId === operationId);
+    pendingProgressRef.current = pendingProgressRef.current.filter((payload) => payload.module !== expectedModule);
+    pendingFinishedRef.current = pendingFinishedRef.current.filter((payload) => payload.module !== expectedModule);
+
+    matchingProgress.forEach((payload) => setProgress(payload));
+    if (matchingFinished) {
+      void cleanupActiveOperation(false);
+      onFinished(matchingFinished);
+    }
   }
 
   useEffect(() => {
@@ -190,15 +240,10 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
 
     try {
       unsubscribeProgressRef.current = await onCleanerOperationProgress((payload) => {
-        if (!mountedRef.current) return;
-        if (payload.module !== "largeFileScan" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
-        setProgress(payload);
+        handleProgressEvent("largeFileScan", payload);
       });
       unsubscribeFinishedRef.current = await onCleanerOperationFinished((payload) => {
-        if (!mountedRef.current) return;
-        if (payload.module !== "largeFileScan" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
-        void cleanupActiveOperation(false);
-        handleScanFinished(payload as OperationFinishedPayload<LargeFileScanReport>);
+        handleFinishedEvent("largeFileScan", payload);
       });
       const operation = await startLargeFileScan(request);
       if (!mountedRef.current) {
@@ -206,6 +251,7 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
         return;
       }
       operationIdRef.current = operation.operationId;
+      flushPendingEvents("largeFileScan", operation.operationId, (payload) => handleScanFinished(payload as OperationFinishedPayload<LargeFileScanReport>));
     } catch {
       await cleanupActiveOperation(false);
       safelySetError("大文件扫描启动失败，本次未迁移任何文件。");
@@ -236,15 +282,10 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
 
     try {
       unsubscribeProgressRef.current = await onCleanerOperationProgress((payload) => {
-        if (!mountedRef.current) return;
-        if (payload.module !== "largeFileMigration" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
-        setProgress(payload);
+        handleProgressEvent("largeFileMigration", payload);
       });
       unsubscribeFinishedRef.current = await onCleanerOperationFinished((payload) => {
-        if (!mountedRef.current) return;
-        if (payload.module !== "largeFileMigration" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
-        void cleanupActiveOperation(false);
-        handleMigrationFinished(payload as OperationFinishedPayload<MigrationResult>);
+        handleFinishedEvent("largeFileMigration", payload);
       });
       const operation = await startLargeFileMigration(buildMigrationRequest(report, selectedIds, targetFolder, originalFilePolicy));
       if (!mountedRef.current) {
@@ -252,6 +293,7 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
         return;
       }
       operationIdRef.current = operation.operationId;
+      flushPendingEvents("largeFileMigration", operation.operationId, (payload) => handleMigrationFinished(payload as OperationFinishedPayload<MigrationResult>));
     } catch {
       await cleanupActiveOperation(false);
       safelySetError("迁移启动失败，本次没有移动任何文件。");
@@ -373,7 +415,7 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
             <button className="secondary-button" type="button" onClick={() => setStep("settings")}>
               返回设置
             </button>
-            <button className="primary-button" disabled={selectedIds.size === 0} type="button" onClick={() => setStep("migrationSettings")}>
+            <button className="primary-button" disabled={selectedCount === 0} type="button" onClick={() => setStep("migrationSettings")}>
               设置迁移目标
             </button>
           </div>
@@ -395,7 +437,7 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
             <button className="secondary-button" type="button" onClick={() => setStep("results")}>
               返回结果
             </button>
-            <button className="primary-button" disabled={targetFolder.trim() === "" || selectedIds.size === 0} type="button" onClick={() => setStep("confirm")}>
+            <button className="primary-button" disabled={targetFolder.trim() === "" || selectedCount === 0} type="button" onClick={() => setStep("confirm")}>
               确认迁移内容
             </button>
           </div>
@@ -407,7 +449,7 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
           <h3>确认迁移</h3>
           <SummaryGrid selectedBytes={selectedBytes} selectedCount={selectedCount} expectedFreedBytes={expectedFreedBytes} totalBytes={report.totalBytes} />
           <div className="large-confirm-lines">
-            <p><strong>目标文件夹</strong><span>{targetFolder}</span></p>
+            <p><strong>目标文件夹</strong><span>{targetFolder.trim()}</span></p>
             <p><strong>处理阶段</strong><span>复制文件 · 校验文件 · 处理原文件</span></p>
           </div>
           <label className="danger-confirm">
@@ -418,7 +460,7 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
             <button className="secondary-button" type="button" onClick={() => setStep("migrationSettings")}>
               返回目标设置
             </button>
-            <button className="primary-button" disabled={!confirmed || selectedIds.size === 0 || targetFolder.trim() === ""} type="button" onClick={() => void beginMigration()}>
+            <button className="primary-button" disabled={!confirmed || selectedCount === 0 || targetFolder.trim() === ""} type="button" onClick={() => void beginMigration()}>
               <Truck size={17} />
               开始迁移
             </button>
@@ -436,6 +478,7 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
             <Metric label="迁移成功" value={formatBytes(migrationResult.totalCopiedBytes)} />
             <Metric label="已释放原位置空间" value={formatBytes(migrationResult.totalFreedBytes)} />
             <Metric label="迁移成功但未释放空间" value={formatBytes(Math.max(0, migrationResult.totalCopiedBytes - migrationResult.totalFreedBytes))} />
+            <Metric label="已跳过" value={formatNumber(migrationResult.skippedCount)} />
             <Metric label="失败" value={formatNumber(migrationResult.failedCount)} />
           </div>
           <ResultBuckets result={migrationResult} />
@@ -597,11 +640,13 @@ function CategoryGroupList({
 
 function ResultBuckets({ result }: { result: MigrationResult }) {
   const copiedOnly = result.itemResults.filter((item) => item.status === "copied");
+  const skipped = result.itemResults.filter((item) => item.status === "skipped");
   const failed = result.itemResults.filter((item) => item.status === "failed");
   return (
     <div className="large-result-buckets">
       <p><strong>迁移成功</strong><span>{formatNumber(result.copiedCount)} 个项目</span></p>
       <p><strong>迁移成功但未释放空间</strong><span>{formatBytes(copiedOnly.reduce((sum, item) => sum + item.bytesCopied, 0))}</span></p>
+      <p><strong>已跳过</strong><span>{formatNumber(Math.max(result.skippedCount, skipped.length))} 个项目</span></p>
       <p><strong>失败</strong><span>{formatNumber(failed.length)} 个项目</span></p>
       {failed.length > 0 && <XCircle size={18} aria-hidden="true" />}
     </div>

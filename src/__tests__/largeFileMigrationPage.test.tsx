@@ -232,7 +232,73 @@ describe("LargeFileMigrationPage", () => {
     expect((await screen.findAllByText("迁移成功"))[0].parentElement).toHaveTextContent("5.0 GB");
     expect(screen.getByText("已释放原位置空间").parentElement).toHaveTextContent("4.0 GB");
     expect(screen.getAllByText("迁移成功但未释放空间")[0].parentElement).toHaveTextContent("1.0 GB");
+    expect(screen.getAllByText("已跳过")[0].parentElement).toHaveTextContent("1");
     expect(screen.getAllByText("失败")[0].parentElement).toHaveTextContent("1");
+  });
+
+  it("applies matching scan finished events received before start resolves", async () => {
+    const start = deferred<{ operationId: string }>();
+    apiMock.startLargeFileScan.mockReturnValueOnce(start.promise);
+    render(<LargeFileMigrationPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /开始扫描/ }));
+    await waitFor(() => expect(apiMock.startLargeFileScan).toHaveBeenCalled());
+
+    act(() => {
+      apiMock.finishedListener?.({
+        operationId: "scan-op",
+        module: "largeFileScan",
+        status: "completed",
+        result: report,
+        message: null,
+      });
+    });
+
+    await act(async () => {
+      start.resolve({ operationId: "scan-op" });
+      await start.promise;
+    });
+
+    expect(await screen.findByRole("heading", { name: /扫描结果/ })).toBeInTheDocument();
+  });
+
+  it("ignores mismatched scan finished events received before start resolves", async () => {
+    const start = deferred<{ operationId: string }>();
+    apiMock.startLargeFileScan.mockReturnValueOnce(start.promise);
+    render(<LargeFileMigrationPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /开始扫描/ }));
+    await waitFor(() => expect(apiMock.startLargeFileScan).toHaveBeenCalled());
+
+    act(() => {
+      apiMock.finishedListener?.({
+        operationId: "other-scan-op",
+        module: "largeFileScan",
+        status: "completed",
+        result: report,
+        message: null,
+      });
+    });
+
+    await act(async () => {
+      start.resolve({ operationId: "scan-op" });
+      await start.promise;
+    });
+
+    expect(screen.queryByRole("heading", { name: /扫描结果/ })).not.toBeInTheDocument();
+    expect(screen.getByText("正在启动扫描")).toBeInTheDocument();
+
+    act(() => {
+      apiMock.finishedListener?.({
+        operationId: "scan-op",
+        module: "largeFileScan",
+        status: "completed",
+        result: report,
+        message: null,
+      });
+    });
+
+    expect(await screen.findByRole("heading", { name: /扫描结果/ })).toBeInTheDocument();
   });
 
   it("cleans up listeners and cancels an active large-file operation on unmount", async () => {
@@ -360,4 +426,14 @@ function progress(
     failedCount: 0,
     ...overrides,
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }
