@@ -322,17 +322,21 @@ describe("DuplicateCleanerPage", () => {
     expect(screen.queryByText(/hidden-strict/)).not.toBeInTheDocument();
   });
 
-  it("smart selection never selects all files in one strict group and skips suspected groups", async () => {
+  it("C drive first selects C drive duplicates when a non-C copy can be retained", async () => {
     await renderResults();
 
     fireEvent.click(screen.getByRole("button", { name: /C 盘优先/ }));
 
     const strictGroup = screen.getByTestId("duplicate-group-strict-a");
+    expect(within(strictGroup).getByLabelText(/plan\.pdf C drive \/ Documents/)).toBeChecked();
+    expect(within(strictGroup).getByLabelText(/plan\.pdf D drive \/ Archive/)).not.toBeChecked();
+    expect(within(strictGroup).getByLabelText(/plan\.pdf C drive \/ Protected 受保护/)).not.toBeChecked();
     expect(
       within(strictGroup)
         .getAllByLabelText(/plan.pdf/)
         .filter((checkbox) => (checkbox as HTMLInputElement).checked).length,
     ).toBe(1);
+    expect(screen.getByText("C 盘已选").parentElement).toHaveTextContent("100 B");
 
     const suspectedGroup = screen.getByTestId("duplicate-group-suspected-a");
     expect(
@@ -432,8 +436,8 @@ describe("DuplicateCleanerPage", () => {
       {
         groupId: "strict-a",
         files: [
-          { entryId: "strict-a-c", selected: false, protected: false },
-          { entryId: "strict-a-d", selected: true, protected: false },
+          { entryId: "strict-a-c", selected: true, protected: false },
+          { entryId: "strict-a-d", selected: false, protected: false },
           { entryId: "strict-a-protected", selected: false, protected: true },
         ],
       },

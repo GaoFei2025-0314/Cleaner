@@ -612,7 +612,7 @@ function canSelectMoreInGroup(group: DuplicateFileGroup, nextFileId: string, sel
 }
 
 function drivePriority(file: DuplicateFileEntry): number {
-  return file.drive.toUpperCase().startsWith("C") ? 0 : 1;
+  return file.drive.toUpperCase().startsWith("C") ? 1 : 0;
 }
 
 function buildCleanupRequest(report: DuplicateScanReport, selectedIds: Set<string>): DuplicateCleanupRequest {
