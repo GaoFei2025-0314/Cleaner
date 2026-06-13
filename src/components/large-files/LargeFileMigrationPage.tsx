@@ -29,9 +29,9 @@ type LargeFileMigrationPageProps = {
 };
 
 const thresholdOptions = [
+  { label: "100MB", value: 100 * 1024 * 1024 },
   { label: "500MB", value: 500 * 1024 * 1024 },
   { label: "1GB", value: 1024 * 1024 * 1024 },
-  { label: "2GB", value: 2 * 1024 * 1024 * 1024 },
 ];
 
 const categoryLabels: Record<LargeFileCategory, string> = {
@@ -67,6 +67,7 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
   const [settings, setSettings] = useState<CleanerSettings | null>(null);
   const [selectedDrives, setSelectedDrives] = useState(["C:"]);
   const [minSizeBytes, setMinSizeBytes] = useState(500 * 1024 * 1024);
+  const [customThresholdMb, setCustomThresholdMb] = useState(500);
   const [originalFilePolicy, setOriginalFilePolicy] = useState<OriginalFilePolicy>("keepOriginal");
   const [targetFolder, setTargetFolder] = useState("D:\\Cleaner_MigratedFiles");
   const [report, setReport] = useState<LargeFileScanReport | null>(null);
@@ -118,6 +119,7 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
         if (disposed) return;
         setSettings(nextSettings);
         setMinSizeBytes(nextSettings.largeFileDefaultThresholdBytes);
+        setCustomThresholdMb(bytesToWholeMb(nextSettings.largeFileDefaultThresholdBytes));
       })
       .catch(() => {
         if (disposed) return;
@@ -135,10 +137,7 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
 
   const selectedBytes = selectedItems.reduce((sum, item) => sum + item.sizeBytes, 0);
   const selectedCount = selectedItems.length;
-  const selectedCDriveBytes = selectedItems
-    .filter((item) => item.drive.toUpperCase().startsWith("C"))
-    .reduce((sum, item) => sum + item.sizeBytes, 0);
-  const expectedFreedBytes = originalFilePolicy === "moveOriginalToRecycleBin" ? selectedCDriveBytes : 0;
+  const expectedFreedBytes = originalFilePolicy === "moveOriginalToRecycleBin" ? selectedBytes : 0;
 
   useEffect(() => {
     const hasUnfinishedFlow = report !== null && ["results", "migrationSettings", "confirm"].includes(step);
@@ -156,6 +155,17 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
     const uniqueDrives = nextDrives.length ? Array.from(new Set(nextDrives)) : ["C:"];
     setSelectedDrives(uniqueDrives);
     setTargetFolder(suggestTargetFolder(uniqueDrives));
+  }
+
+  function updatePresetThreshold(value: number) {
+    setMinSizeBytes(value);
+    setCustomThresholdMb(bytesToWholeMb(value));
+  }
+
+  function updateCustomThreshold(value: number) {
+    const nextMb = Math.max(1, Math.trunc(value) || 1);
+    setCustomThresholdMb(nextMb);
+    setMinSizeBytes(nextMb * 1024 * 1024);
   }
 
   async function beginScan() {
@@ -317,11 +327,29 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
                     checked={minSizeBytes === option.value}
                     name="large-file-threshold"
                     type="radio"
-                    onChange={() => setMinSizeBytes(option.value)}
+                    onChange={() => updatePresetThreshold(option.value)}
                   />
                   <span>{option.label}</span>
                 </label>
               ))}
+              <label className="check-line">
+                <input
+                  checked={!thresholdOptions.some((option) => option.value === minSizeBytes)}
+                  name="large-file-threshold"
+                  type="radio"
+                  onChange={() => updateCustomThreshold(customThresholdMb)}
+                />
+                <span>自定义</span>
+              </label>
+              <label className="inline-field large-threshold-field">
+                <span>自定义阈值（MB）</span>
+                <input
+                  min={1}
+                  type="number"
+                  value={customThresholdMb}
+                  onChange={(event) => updateCustomThreshold(Number(event.currentTarget.value))}
+                />
+              </label>
             </div>
           </div>
           <div className="duplicate-option-block">
@@ -603,6 +631,10 @@ function suggestTargetFolder(selectedDrives: string[]): string {
   const sourceDrives = new Set(selectedDrives.map((drive) => drive.toUpperCase()));
   const targetDrive = ["D:", "E:", "F:"].find((drive) => !sourceDrives.has(drive));
   return targetDrive ? `${targetDrive}\\Cleaner_MigratedFiles` : "";
+}
+
+function bytesToWholeMb(bytes: number): number {
+  return Math.max(1, Math.round(bytes / (1024 * 1024)));
 }
 
 function formatBytes(bytes: number): string {

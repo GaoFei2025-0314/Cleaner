@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import { LargeFileMigrationPage } from "../components/large-files/LargeFileMigrationPage";
@@ -119,9 +119,25 @@ describe("LargeFileMigrationPage", () => {
 
     expect(await screen.findByRole("heading", { name: /大文件迁移/ })).toBeInTheDocument();
     expect(screen.getByLabelText(/C:/)).toBeChecked();
+    expect(screen.getByRole("radio", { name: /100MB/ })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /500MB/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /1GB/ })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /自定义/ })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /保留原文件/ })).toBeChecked();
     expect(screen.getByRole("button", { name: /开始扫描/ })).toBeEnabled();
+  });
+
+  it("uses custom MB threshold for large-file scan requests", async () => {
+    render(<LargeFileMigrationPage />);
+
+    await screen.findByRole("heading", { name: /大文件迁移/ });
+    fireEvent.click(screen.getByRole("radio", { name: /自定义/ }));
+    fireEvent.change(screen.getByLabelText(/自定义阈值/), { target: { value: "768" } });
+    fireEvent.click(screen.getByRole("button", { name: /开始扫描/ }));
+
+    await waitFor(() => expect(apiMock.startLargeFileScan).toHaveBeenCalledWith(expect.objectContaining({
+      minSizeBytes: 768 * 1024 * 1024,
+    })));
   });
 
   it("shows scan progress percent and found large-file bytes", async () => {
@@ -182,7 +198,7 @@ describe("LargeFileMigrationPage", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: /迁移后将原文件移入回收站/ }));
 
-    expect(screen.getByText("预计释放原位置空间").parentElement).toHaveTextContent("6.3 GB");
+    expect(screen.getByText("预计释放原位置空间").parentElement).toHaveTextContent("8.3 GB");
   });
 
   it("gates starting migration with a confirmation checkbox", async () => {

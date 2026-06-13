@@ -740,6 +740,10 @@ button {
   flex-direction: column;
 }
 
+.large-threshold-field {
+  width: fit-content;
+}
+
 .large-target-field input {
   width: 100%;
 }
