@@ -4,13 +4,16 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use c_drive_cleaner::cleanup::{
-    delete_path_contents, execute_selected_cleanup, execute_selected_cleanup_with_recycle_bin,
-    validate_high_risk_confirmation,
+    build_c_drive_cleanup_history_entry, delete_path_contents, execute_selected_cleanup,
+    execute_selected_cleanup_with_recycle_bin, validate_high_risk_confirmation,
 };
 use c_drive_cleaner::models::{
-    CleanupAction, CleanupSelection, RiskLevel, ScanItem, SourceCategory,
+    CleanupAction, CleanupItemResult, CleanupResult, CleanupSelection, RiskLevel, ScanItem,
+    SourceCategory,
 };
 use c_drive_cleaner::paths::ScanRoots;
+use c_drive_cleaner::v2::history::history_entry_is_desensitized;
+use c_drive_cleaner::v2::models::OperationModule;
 use c_drive_cleaner::v2::recycle_bin::{RecycleBin, RecycleBinError};
 
 #[cfg(windows)]
@@ -160,6 +163,55 @@ fn reports_selected_item_that_disappeared_before_cleanup() {
     assert_eq!(result.results.len(), 1);
     assert_eq!(result.results[0].item_id, "user-temp");
     assert_eq!(result.results[0].status, "skipped");
+}
+
+#[test]
+fn builds_desensitized_c_drive_cleanup_history_entry_with_status_counts() {
+    let result = CleanupResult {
+        results: vec![
+            CleanupItemResult {
+                item_id: "user-temp".to_string(),
+                status: "deleted".to_string(),
+                freed_bytes: 500,
+                message: "C:\\Users\\Administrator\\secret.txt 已移入回收站。".to_string(),
+            },
+            CleanupItemResult {
+                item_id: "browser-cache".to_string(),
+                status: "skipped".to_string(),
+                freed_bytes: 0,
+                message: "private-report.pdf 已跳过。".to_string(),
+            },
+            CleanupItemResult {
+                item_id: "bad-item".to_string(),
+                status: "failed".to_string(),
+                freed_bytes: 0,
+                message: "0123456789abcdef0123456789abcdef 清理失败。".to_string(),
+            },
+        ],
+        total_freed_bytes: 500,
+        finished_at: "2026-06-12T00:00:01Z".to_string(),
+    };
+
+    let entry = build_c_drive_cleanup_history_entry(&result, "2026-06-12T00:00:00Z");
+
+    assert_eq!(entry.module, OperationModule::CDriveCleanup);
+    assert_eq!(entry.total_bytes, 500);
+    assert_eq!(entry.freed_bytes, 500);
+    assert_eq!(entry.c_drive_freed_bytes, 500);
+    assert_eq!(entry.other_drive_freed_bytes, 0);
+    assert_eq!(entry.success_count, 1);
+    assert_eq!(entry.skipped_count, 1);
+    assert_eq!(entry.failed_count, 1);
+    assert_eq!(
+        entry.error_categories,
+        vec!["部分项目失败".to_string(), "部分项目跳过".to_string()]
+    );
+    assert!(history_entry_is_desensitized(&entry));
+
+    let serialized = serde_json::to_string(&entry).unwrap();
+    assert!(!serialized.contains("secret.txt"));
+    assert!(!serialized.contains("private-report.pdf"));
+    assert!(!serialized.contains("0123456789abcdef0123456789abcdef"));
 }
 
 #[test]

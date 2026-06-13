@@ -1,12 +1,11 @@
 export type OperationStatus = "running" | "completed" | "cancelled" | "failed";
 
 export type OperationModule =
+  | "cDriveCleanup"
   | "duplicateScan"
   | "duplicateCleanup"
   | "largeFileScan"
   | "largeFileMigration";
-
-export type HistoryModule = OperationModule | "cDriveCleanup";
 
 export type OriginalFilePolicy = "keepOriginal" | "moveOriginalToRecycleBin";
 
@@ -64,7 +63,7 @@ export interface CleanerSettings {
 
 export interface HistoryEntry {
   historyId: string;
-  module: HistoryModule;
+  module: OperationModule;
   startedAt: string;
   finishedAt: string;
   totalBytes: number;

@@ -7,6 +7,14 @@ use c_drive_cleaner::v2::history::{
 use c_drive_cleaner::v2::models::{HistoryEntry, OperationModule};
 
 #[test]
+fn c_drive_cleanup_module_serializes_as_camel_case() {
+    assert_eq!(
+        serde_json::to_value(OperationModule::CDriveCleanup).unwrap(),
+        serde_json::json!("cDriveCleanup")
+    );
+}
+
+#[test]
 fn history_entry_rejects_paths_file_names_hashes_and_usernames() {
     let unsafe_entry = HistoryEntry {
         history_id: "h1".to_string(),
@@ -112,6 +120,27 @@ fn append_history_entry_creates_parent_directory_and_enforces_desensitization() 
     )
     .unwrap_err();
     assert_eq!(error, "历史记录包含未脱敏内容");
+}
+
+#[test]
+fn append_history_entry_round_trips_c_drive_cleanup_module() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let history_path = temp_dir.path().join("history.json");
+    let safe_entry = HistoryEntry {
+        module: OperationModule::CDriveCleanup,
+        ..history_entry_with_errors(vec!["无错误".to_string()])
+    };
+
+    append_history_entry_at_path(&history_path, safe_entry.clone()).unwrap();
+
+    let entries = list_operation_history_at_path(&history_path).unwrap();
+    assert_eq!(entries, vec![safe_entry]);
+    assert_eq!(
+        fs::read_to_string(&history_path)
+            .unwrap()
+            .contains("cDriveCleanup"),
+        true
+    );
 }
 
 fn history_entry_with_errors(error_categories: Vec<String>) -> HistoryEntry {

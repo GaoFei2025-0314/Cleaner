@@ -17,6 +17,7 @@ use crate::paths::{
 };
 use crate::processes::find_process_references;
 use crate::rules::builtin_rules;
+use crate::v2::models::{HistoryEntry, OperationModule};
 use crate::v2::recycle_bin::{RecycleBin, RecycleBinError, SystemRecycleBin};
 
 pub fn validate_high_risk_confirmation(
@@ -402,5 +403,52 @@ pub fn build_cleanup_result(results: Vec<CleanupItemResult>) -> CleanupResult {
         results,
         total_freed_bytes: total,
         finished_at: now_iso(),
+    }
+}
+
+pub fn build_c_drive_cleanup_history_entry(
+    result: &CleanupResult,
+    started_at: impl Into<String>,
+) -> HistoryEntry {
+    let success_count = result
+        .results
+        .iter()
+        .filter(|item| item.status == "deleted")
+        .count() as u64;
+    let skipped_count = result
+        .results
+        .iter()
+        .filter(|item| item.status == "skipped")
+        .count() as u64;
+    let failed_count = result
+        .results
+        .iter()
+        .filter(|item| item.status != "deleted" && item.status != "skipped")
+        .count() as u64;
+
+    let mut error_categories = Vec::new();
+    if failed_count > 0 {
+        error_categories.push("部分项目失败".to_string());
+    }
+    if skipped_count > 0 {
+        error_categories.push("部分项目跳过".to_string());
+    }
+    if error_categories.is_empty() {
+        error_categories.push("无错误".to_string());
+    }
+
+    HistoryEntry {
+        history_id: format!("history-cdrive-{}", uuid::Uuid::new_v4()),
+        module: OperationModule::CDriveCleanup,
+        started_at: started_at.into(),
+        finished_at: result.finished_at.clone(),
+        total_bytes: result.total_freed_bytes,
+        freed_bytes: result.total_freed_bytes,
+        c_drive_freed_bytes: result.total_freed_bytes,
+        other_drive_freed_bytes: 0,
+        success_count,
+        skipped_count,
+        failed_count,
+        error_categories,
     }
 }

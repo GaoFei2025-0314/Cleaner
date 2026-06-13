@@ -1,11 +1,11 @@
 import { Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { HistoryEntry, HistoryModule } from "../../domain/v2";
+import type { HistoryEntry, OperationModule } from "../../domain/v2";
 import { clearOperationHistory, listOperationHistory } from "../../services/v2Api";
 
 type HistoryFilter = "cDrive" | "duplicate" | "largeFiles";
 
-const moduleLabels: Record<HistoryModule, string> = {
+const moduleLabels: Record<OperationModule, string> = {
   cDriveCleanup: "C 盘清理",
   duplicateScan: "重复文件扫描",
   duplicateCleanup: "重复文件清理",

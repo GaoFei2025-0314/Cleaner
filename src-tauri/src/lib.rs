@@ -35,11 +35,18 @@ fn scan_c_drive() -> Result<ScanReport, String> {
 }
 
 #[tauri::command]
-fn execute_cleanup(selection: CleanupSelection) -> Result<CleanupResult, String> {
+fn execute_cleanup(
+    app_handle: tauri::AppHandle,
+    selection: CleanupSelection,
+) -> Result<CleanupResult, String> {
+    let started_at = fixtures::now_iso();
     let roots = ScanRoots::from_current_user().map_err(|error| error.to_string())?;
     let drive_summary = drive::c_drive_summary().map_err(|error| error.to_string())?;
     let report = scan::scan_with_roots(&roots, drive_summary);
-    cleanup::execute_selected_cleanup(&selection, &report.items, &roots)
+    let result = cleanup::execute_selected_cleanup(&selection, &report.items, &roots)?;
+    let history_entry = cleanup::build_c_drive_cleanup_history_entry(&result, started_at);
+    let _ = v2::history::append_history_entry(&app_handle, history_entry);
+    Ok(result)
 }
 
 #[tauri::command]
