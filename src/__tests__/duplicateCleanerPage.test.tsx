@@ -34,9 +34,9 @@ const report: DuplicateScanReport = {
       files: [
         {
           entryId: "strict-a-c",
-          displayName: "plan.pdf",
+          displayName: "重复文件 1",
           drive: "C:",
-          visibleLocationHint: "C drive / Documents",
+          visibleLocationHint: "C 盘 · 文件夹",
           sizeBytes: 100,
           modifiedAt: "2026-05-03T00:00:00.000Z",
           hashFingerprintId: "hidden-strict-a",
@@ -46,9 +46,9 @@ const report: DuplicateScanReport = {
         },
         {
           entryId: "strict-a-d",
-          displayName: "plan.pdf",
+          displayName: "重复文件 2",
           drive: "D:",
-          visibleLocationHint: "D drive / Archive",
+          visibleLocationHint: "D 盘 · 文件夹",
           sizeBytes: 100,
           modifiedAt: "2026-05-02T00:00:00.000Z",
           hashFingerprintId: "hidden-strict-a",
@@ -58,9 +58,9 @@ const report: DuplicateScanReport = {
         },
         {
           entryId: "strict-a-protected",
-          displayName: "plan.pdf",
+          displayName: "重复文件 3",
           drive: "C:",
-          visibleLocationHint: "C drive / Protected",
+          visibleLocationHint: "C 盘 · 文件夹",
           sizeBytes: 100,
           modifiedAt: "2026-05-01T00:00:00.000Z",
           hashFingerprintId: "hidden-strict-a",
@@ -81,9 +81,9 @@ const report: DuplicateScanReport = {
       files: [
         {
           entryId: "suspected-a-1",
-          displayName: "clip.mov",
+          displayName: "疑似重复 1",
           drive: "C:",
-          visibleLocationHint: "C drive / Videos",
+          visibleLocationHint: "C 盘 · 文件夹",
           sizeBytes: 200,
           modifiedAt: "2026-05-03T00:00:00.000Z",
           hashFingerprintId: "hidden-suspected-a",
@@ -93,9 +93,9 @@ const report: DuplicateScanReport = {
         },
         {
           entryId: "suspected-a-2",
-          displayName: "clip copy.mov",
+          displayName: "疑似重复 2",
           drive: "E:",
-          visibleLocationHint: "E drive / Media",
+          visibleLocationHint: "E 盘 · 文件夹",
           sizeBytes: 200,
           modifiedAt: "2026-05-02T00:00:00.000Z",
           hashFingerprintId: "hidden-suspected-b",
@@ -236,7 +236,7 @@ describe("DuplicateCleanerPage", () => {
         module: "duplicateScan",
         stage: "正在比对指纹",
         percent: 44,
-        currentLocationHint: "C drive / Downloads",
+        currentLocationHint: "C 盘 · 文件夹",
         currentFileType: "document",
         scannedFiles: 321,
         foundGroups: 4,
@@ -251,7 +251,7 @@ describe("DuplicateCleanerPage", () => {
 
     expect(await screen.findByText("44%")).toBeInTheDocument();
     expect(screen.getByText("正在比对指纹")).toBeInTheDocument();
-    expect(screen.getByText("C drive / Downloads")).toBeInTheDocument();
+    expect(screen.getByText("C 盘 · 文件夹")).toBeInTheDocument();
     expect(screen.getByText("321")).toBeInTheDocument();
     expect(screen.getByText("发现重复组").parentElement).toHaveTextContent("4");
     expect(screen.getByText("发现文件").parentElement).toHaveTextContent("9");
@@ -311,7 +311,34 @@ describe("DuplicateCleanerPage", () => {
     expect(apiMock.startDuplicateScan).not.toHaveBeenCalled();
   });
 
-  it("ignores scan events until the start call returns the operation id", async () => {
+  it("applies matching scan finished events received before start resolves", async () => {
+    const scanStart = deferred<{ operationId: string }>();
+    apiMock.startDuplicateScan.mockReturnValueOnce(scanStart.promise);
+    render(<DuplicateCleanerPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /开始扫描/ }));
+    await waitFor(() => expect(apiMock.startDuplicateScan).toHaveBeenCalled());
+    await waitFor(() => expect(apiMock.finishedListener).toBeDefined());
+
+    act(() => {
+      apiMock.finishedListener?.({
+        operationId: "scan-op",
+        module: "duplicateScan",
+        status: "completed",
+        result: report,
+        message: null,
+      });
+    });
+
+    await act(async () => {
+      scanStart.resolve({ operationId: "scan-op" });
+      await scanStart.promise;
+    });
+
+    expect(await screen.findByRole("heading", { name: /扫描结果/ })).toBeInTheDocument();
+  });
+
+  it("ignores mismatched scan events received before start resolves", async () => {
     const scanStart = deferred<{ operationId: string }>();
     apiMock.startDuplicateScan.mockReturnValueOnce(scanStart.promise);
     render(<DuplicateCleanerPage />);
@@ -379,14 +406,30 @@ describe("DuplicateCleanerPage", () => {
     } satisfies Partial<DuplicateScanRequest>)));
   });
 
+  it("sends custom folders with duplicate scan requests", async () => {
+    render(<DuplicateCleanerPage />);
+
+    await screen.findByRole("heading", { name: /重复文件清理/ });
+    fireEvent.change(screen.getByLabelText(/文件夹路径/), { target: { value: "D:\\Downloads" } });
+    fireEvent.click(screen.getByRole("button", { name: /添加文件夹/ }));
+    fireEvent.click(screen.getByRole("button", { name: /开始扫描/ }));
+
+    await waitFor(() => expect(apiMock.startDuplicateScan).toHaveBeenCalledWith(expect.objectContaining({
+      customFolders: ["D:\\Downloads"],
+    } satisfies Partial<DuplicateScanRequest>)));
+  });
+
   it("separates strict and suspected duplicate results and does not show raw fingerprints", async () => {
     await renderResults();
 
     expect(screen.getByRole("heading", { name: /严格重复/ })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /疑似重复/ })).toBeInTheDocument();
-    expect(screen.getAllByText("plan.pdf")).toHaveLength(3);
+    expect(screen.getByText("重复文件 1")).toBeInTheDocument();
+    expect(screen.getByText("重复文件 2")).toBeInTheDocument();
+    expect(screen.getByText("重复文件 3")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /展开疑似重复/ }));
-    expect(screen.getByText("clip.mov")).toBeInTheDocument();
+    expect(screen.getByText("疑似重复 1")).toBeInTheDocument();
+    expect(screen.getByText(/疑似重复仅供查看/)).toBeInTheDocument();
     expect(screen.queryByText(/hidden-strict/)).not.toBeInTheDocument();
   });
 
@@ -396,12 +439,12 @@ describe("DuplicateCleanerPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /C 盘优先/ }));
 
     const strictGroup = screen.getByTestId("duplicate-group-strict-a");
-    expect(within(strictGroup).getByLabelText(/plan\.pdf C drive \/ Documents/)).toBeChecked();
-    expect(within(strictGroup).getByLabelText(/plan\.pdf D drive \/ Archive/)).not.toBeChecked();
-    expect(within(strictGroup).getByLabelText(/plan\.pdf C drive \/ Protected 受保护/)).not.toBeChecked();
+    expect(within(strictGroup).getByLabelText(/重复文件 1/)).toBeChecked();
+    expect(within(strictGroup).getByLabelText(/重复文件 2/)).not.toBeChecked();
+    expect(within(strictGroup).getByLabelText(/重复文件 3.*受保护/u)).not.toBeChecked();
     expect(
       within(strictGroup)
-        .getAllByLabelText(/plan.pdf/)
+        .getAllByLabelText(/重复文件/)
         .filter((checkbox) => (checkbox as HTMLInputElement).checked).length,
     ).toBe(1);
     expect(screen.getByText("C 盘已选").parentElement).toHaveTextContent("100 B");
@@ -432,7 +475,7 @@ describe("DuplicateCleanerPage", () => {
   it("does not auto-select protected files", async () => {
     await renderResults();
 
-    const protectedFile = screen.getByLabelText(/plan.pdf.*受保护/u);
+    const protectedFile = screen.getByLabelText(/重复文件 3.*受保护/u);
     expect(protectedFile).not.toBeChecked();
     expect(protectedFile).toBeDisabled();
     expect(screen.getByText("受保护")).toBeInTheDocument();
@@ -454,7 +497,7 @@ describe("DuplicateCleanerPage", () => {
         module: "duplicateCleanup",
         stage: "正在移入回收站",
         percent: 67,
-        currentLocationHint: "D drive / Archive",
+        currentLocationHint: "D 盘 · 文件夹",
         currentFileType: "document",
         scannedFiles: 0,
         foundGroups: 0,
@@ -468,7 +511,7 @@ describe("DuplicateCleanerPage", () => {
     });
 
     expect(await screen.findByText("67%")).toBeInTheDocument();
-    expect(screen.getByText("D drive / Archive")).toBeInTheDocument();
+    expect(screen.getByText("D 盘 · 文件夹")).toBeInTheDocument();
     expect(screen.getByText(/已移入回收站：1/)).toBeInTheDocument();
     expect(screen.getByText(/已跳过：2/)).toBeInTheDocument();
     expect(screen.getByText(/失败：3/)).toBeInTheDocument();
@@ -490,8 +533,6 @@ describe("DuplicateCleanerPage", () => {
 
   it("sends selected and retained files for groups included in cleanup", async () => {
     await renderResults();
-    fireEvent.click(screen.getByRole("button", { name: /展开疑似重复/ }));
-    fireEvent.click(screen.getByLabelText(/clip copy\.mov/));
     fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: /我已确认/ }));
     fireEvent.click(screen.getByRole("button", { name: /开始清理/ }));
@@ -509,17 +550,55 @@ describe("DuplicateCleanerPage", () => {
           { entryId: "strict-a-protected", selected: false, protected: true },
         ],
       },
-      {
-        groupId: "suspected-a",
-        files: [
-          { entryId: "suspected-a-1", selected: false, protected: false },
-          { entryId: "suspected-a-2", selected: true, protected: false },
-        ],
-      },
     ]);
   });
 
-  it("ignores cleanup events until the start call returns the operation id", async () => {
+  it("keeps suspected duplicates read-only and out of cleanup requests", async () => {
+    await renderResults();
+    fireEvent.click(screen.getByRole("button", { name: /展开疑似重复/ }));
+    const suspectedGroup = screen.getByTestId("duplicate-group-suspected-a");
+
+    within(suspectedGroup)
+      .getAllByRole("checkbox")
+      .forEach((checkbox) => expect(checkbox).toBeDisabled());
+
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /我已确认/ }));
+    fireEvent.click(screen.getByRole("button", { name: /开始清理/ }));
+
+    await waitFor(() => expect(apiMock.startDuplicateCleanup).toHaveBeenCalled());
+    const cleanupCalls = apiMock.startDuplicateCleanup.mock.calls as unknown as [[DuplicateCleanupRequest]];
+    expect(cleanupCalls[0][0].groups.map((group) => group.groupId)).toEqual(["strict-a"]);
+  });
+
+  it("applies matching cleanup finished events received before start resolves", async () => {
+    const cleanupStart = deferred<{ operationId: string }>();
+    apiMock.startDuplicateCleanup.mockReturnValueOnce(cleanupStart.promise);
+    await renderResults();
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /我已确认/ }));
+    fireEvent.click(screen.getByRole("button", { name: /开始清理/ }));
+    await waitFor(() => expect(apiMock.startDuplicateCleanup).toHaveBeenCalled());
+
+    act(() => {
+      apiMock.finishedListener?.({
+        operationId: "clean-op",
+        module: "duplicateCleanup",
+        status: "completed",
+        result: cleanupReport,
+        message: null,
+      });
+    });
+
+    await act(async () => {
+      cleanupStart.resolve({ operationId: "clean-op" });
+      await cleanupStart.promise;
+    });
+
+    expect(await screen.findByRole("heading", { name: /清理完成/ })).toBeInTheDocument();
+  });
+
+  it("ignores mismatched cleanup events received before start resolves", async () => {
     const cleanupStart = deferred<{ operationId: string }>();
     apiMock.startDuplicateCleanup.mockReturnValueOnce(cleanupStart.promise);
     await renderResults();

@@ -140,6 +140,19 @@ describe("LargeFileMigrationPage", () => {
     })));
   });
 
+  it("sends custom folders with large-file scan requests", async () => {
+    render(<LargeFileMigrationPage />);
+
+    await screen.findByRole("heading", { name: /大文件迁移/ });
+    fireEvent.change(screen.getByLabelText(/文件夹路径/), { target: { value: "E:\\Media" } });
+    fireEvent.click(screen.getByRole("button", { name: /添加文件夹/ }));
+    fireEvent.click(screen.getByRole("button", { name: /开始扫描/ }));
+
+    await waitFor(() => expect(apiMock.startLargeFileScan).toHaveBeenCalledWith(expect.objectContaining({
+      customFolders: ["E:\\Media"],
+    })));
+  });
+
   it("shows scan progress percent and found large-file bytes", async () => {
     render(<LargeFileMigrationPage />);
 

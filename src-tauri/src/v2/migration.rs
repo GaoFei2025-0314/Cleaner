@@ -536,11 +536,11 @@ fn migrate_one_item(
         }),
         Err(_) => Ok(MigrationItemResult {
             item_id: entry.item_id.clone(),
-            status: MigrationItemStatus::Copied,
+            status: MigrationItemStatus::Failed,
             category: entry.category.clone(),
-            bytes_copied: entry.size_bytes,
+            bytes_copied: 0,
             bytes_freed: 0,
-            message: "已复制，原文件未移入回收站".to_string(),
+            message: "原文件移入回收站失败，已保留复制文件和原文件".to_string(),
         }),
     }
 }

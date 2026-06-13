@@ -40,6 +40,8 @@ pub fn validate_high_risk_confirmation(
     }
 }
 
+#[doc(hidden)]
+// Test helper for legacy path-deletion safety checks. Production cleanup paths use recycle bin.
 pub fn delete_path_contents(path: &Path) -> Result<u64, CleanerError> {
     let mut freed = 0;
     if !path.exists() {
@@ -79,6 +81,8 @@ pub fn delete_path_contents(path: &Path) -> Result<u64, CleanerError> {
     Ok(freed)
 }
 
+#[doc(hidden)]
+// Test helper for legacy path-deletion safety checks. Production cleanup paths use recycle bin.
 pub fn delete_path_or_contents(path: &Path, contents_only: bool) -> Result<u64, CleanerError> {
     if contents_only {
         return delete_path_contents(path);

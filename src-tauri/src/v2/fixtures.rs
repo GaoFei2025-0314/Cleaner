@@ -9,7 +9,7 @@ pub fn duplicate_group_for_selection(files: Vec<(&str, &str, &str)>) -> Duplicat
                 entry_id: format!("entry-{index}"),
                 display_name: display_name.to_string(),
                 drive: drive.to_string(),
-                visible_location_hint: format!("{drive}\\...\\folder"),
+                visible_location_hint: format!("{} 盘 · 文件夹", drive.trim_end_matches(':')),
                 size_bytes: 10,
                 modified_at: modified_at.to_string(),
                 hash_fingerprint_id: "fixture-fingerprint".to_string(),

@@ -65,6 +65,8 @@ export function DuplicateCleanerPage({ onBlockingWorkChange }: DuplicateCleanerP
   const [settings, setSettings] = useState<CleanerSettings | null>(null);
   const [fileTypes, setFileTypes] = useState<DuplicateFileType[]>(["image", "document", "archive"]);
   const [selectedDrives, setSelectedDrives] = useState(["C:"]);
+  const [customFolders, setCustomFolders] = useState<string[]>([]);
+  const [customFolderInput, setCustomFolderInput] = useState("");
   const [includeSuspected, setIncludeSuspected] = useState(false);
   const [minSizeBytes, setMinSizeBytes] = useState(1);
   const [strategy, setStrategy] = useState<DuplicateDefaultStrategy | "manual">("cDriveFirstKeepNewest");
@@ -79,6 +81,8 @@ export function DuplicateCleanerPage({ onBlockingWorkChange }: DuplicateCleanerP
   const mountedRef = useRef(true);
   const unsubscribeProgressRef = useRef<CleanerUnsubscribe | null>(null);
   const unsubscribeFinishedRef = useRef<CleanerUnsubscribe | null>(null);
+  const pendingProgressRef = useRef<OperationProgressPayload[]>([]);
+  const pendingFinishedRef = useRef<OperationFinishedPayload[]>([]);
 
   async function cleanupActiveOperation(cancelBackend: boolean) {
     const operationId = operationIdRef.current;
@@ -87,6 +91,8 @@ export function DuplicateCleanerPage({ onBlockingWorkChange }: DuplicateCleanerP
     operationIdRef.current = null;
     unsubscribeProgressRef.current = null;
     unsubscribeFinishedRef.current = null;
+    pendingProgressRef.current = [];
+    pendingFinishedRef.current = [];
 
     await Promise.allSettled([
       unsubscribeProgress?.(),
@@ -166,6 +172,63 @@ export function DuplicateCleanerPage({ onBlockingWorkChange }: DuplicateCleanerP
     setSelectedDrives(nextDrives.length ? Array.from(new Set(nextDrives)) : ["C:"]);
   }
 
+  function addCustomFolder() {
+    const folder = customFolderInput.trim();
+    if (!folder) return;
+    setCustomFolders((current) => Array.from(new Set([...current, folder])));
+    setCustomFolderInput("");
+  }
+
+  function removeCustomFolder(folder: string) {
+    setCustomFolders((current) => current.filter((item) => item !== folder));
+  }
+
+  function handleProgressEvent(expectedModule: OperationProgressPayload["module"], payload: OperationProgressPayload) {
+    if (!mountedRef.current || payload.module !== expectedModule) return;
+    const operationId = operationIdRef.current;
+    if (!operationId) {
+      pendingProgressRef.current = [...pendingProgressRef.current, payload];
+      return;
+    }
+    if (payload.operationId === operationId) {
+      setProgress(payload);
+    }
+  }
+
+  function handleFinishedEvent(expectedModule: OperationFinishedPayload["module"], payload: OperationFinishedPayload) {
+    if (!mountedRef.current || payload.module !== expectedModule) return;
+    const operationId = operationIdRef.current;
+    if (!operationId) {
+      pendingFinishedRef.current = [...pendingFinishedRef.current, payload];
+      return;
+    }
+    if (payload.operationId === operationId) {
+      void cleanupActiveOperation(false);
+      if (expectedModule === "duplicateScan") {
+        handleScanFinished(payload as OperationFinishedPayload<DuplicateScanReport>);
+      } else if (expectedModule === "duplicateCleanup") {
+        handleCleanupFinished(payload as OperationFinishedPayload<DuplicateCleanupReport>);
+      }
+    }
+  }
+
+  function flushPendingEvents(
+    expectedModule: OperationFinishedPayload["module"],
+    operationId: string,
+    onFinished: (payload: OperationFinishedPayload) => void,
+  ) {
+    const matchingProgress = pendingProgressRef.current.filter((payload) => payload.module === expectedModule && payload.operationId === operationId);
+    const matchingFinished = pendingFinishedRef.current.find((payload) => payload.module === expectedModule && payload.operationId === operationId);
+    pendingProgressRef.current = pendingProgressRef.current.filter((payload) => payload.module !== expectedModule);
+    pendingFinishedRef.current = pendingFinishedRef.current.filter((payload) => payload.module !== expectedModule);
+
+    matchingProgress.forEach((payload) => setProgress(payload));
+    if (matchingFinished) {
+      void cleanupActiveOperation(false);
+      onFinished(matchingFinished);
+    }
+  }
+
   async function beginScan() {
     if (!settings) {
       setError("设置仍在加载中，请稍后再开始扫描。");
@@ -174,7 +237,7 @@ export function DuplicateCleanerPage({ onBlockingWorkChange }: DuplicateCleanerP
 
     const request: DuplicateScanRequest = {
       selectedDrives,
-      customFolders: [],
+      customFolders,
       fileTypes,
       customExtensions: [],
       includeSuspected,
@@ -188,15 +251,10 @@ export function DuplicateCleanerPage({ onBlockingWorkChange }: DuplicateCleanerP
 
     try {
       unsubscribeProgressRef.current = await onCleanerOperationProgress((payload) => {
-        if (!mountedRef.current) return;
-        if (payload.module !== "duplicateScan" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
-        setProgress(payload);
+        handleProgressEvent("duplicateScan", payload);
       });
       unsubscribeFinishedRef.current = await onCleanerOperationFinished((payload) => {
-        if (!mountedRef.current) return;
-        if (payload.module !== "duplicateScan" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
-        void cleanupActiveOperation(false);
-        handleScanFinished(payload as OperationFinishedPayload<DuplicateScanReport>);
+        handleFinishedEvent("duplicateScan", payload);
       });
       const operation = await startDuplicateScan(request);
       if (!mountedRef.current) {
@@ -204,6 +262,7 @@ export function DuplicateCleanerPage({ onBlockingWorkChange }: DuplicateCleanerP
         return;
       }
       operationIdRef.current = operation.operationId;
+      flushPendingEvents("duplicateScan", operation.operationId, (payload) => handleScanFinished(payload as OperationFinishedPayload<DuplicateScanReport>));
     } catch {
       await cleanupActiveOperation(false);
       safelySetError("重复文件扫描启动失败，本次未执行任何清理。");
@@ -234,15 +293,10 @@ export function DuplicateCleanerPage({ onBlockingWorkChange }: DuplicateCleanerP
 
     try {
       unsubscribeProgressRef.current = await onCleanerOperationProgress((payload) => {
-        if (!mountedRef.current) return;
-        if (payload.module !== "duplicateCleanup" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
-        setProgress(payload);
+        handleProgressEvent("duplicateCleanup", payload);
       });
       unsubscribeFinishedRef.current = await onCleanerOperationFinished((payload) => {
-        if (!mountedRef.current) return;
-        if (payload.module !== "duplicateCleanup" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
-        void cleanupActiveOperation(false);
-        handleCleanupFinished(payload as OperationFinishedPayload<DuplicateCleanupReport>);
+        handleFinishedEvent("duplicateCleanup", payload);
       });
       const operation = await startDuplicateCleanup(buildCleanupRequest(report, selectedIds));
       if (!mountedRef.current) {
@@ -250,6 +304,7 @@ export function DuplicateCleanerPage({ onBlockingWorkChange }: DuplicateCleanerP
         return;
       }
       operationIdRef.current = operation.operationId;
+      flushPendingEvents("duplicateCleanup", operation.operationId, (payload) => handleCleanupFinished(payload as OperationFinishedPayload<DuplicateCleanupReport>));
     } catch {
       await cleanupActiveOperation(false);
       safelySetError("清理启动失败，本次没有删除任何文件。");
@@ -347,6 +402,34 @@ export function DuplicateCleanerPage({ onBlockingWorkChange }: DuplicateCleanerP
               ))}
             </div>
           </div>
+          <div className="duplicate-option-block">
+            <strong>自定义文件夹</strong>
+            <div className="folder-input-row">
+              <label className="inline-field">
+                <span>文件夹路径</span>
+                <input
+                  value={customFolderInput}
+                  placeholder="例如 D:\\Downloads"
+                  onChange={(event) => setCustomFolderInput(event.currentTarget.value)}
+                />
+              </label>
+              <button className="secondary-button" type="button" onClick={addCustomFolder}>
+                添加文件夹
+              </button>
+            </div>
+            {customFolders.length > 0 && (
+              <div className="folder-chip-list">
+                {customFolders.map((folder) => (
+                  <span key={folder} className="folder-chip">
+                    {folder}
+                    <button type="button" aria-label={`移除 ${folder}`} onClick={() => removeCustomFolder(folder)}>
+                      移除
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
           <label className="check-line">
             <input
               checked={includeSuspected}
@@ -410,6 +493,7 @@ export function DuplicateCleanerPage({ onBlockingWorkChange }: DuplicateCleanerP
             collapsible
             expandedIds={expandedSuspected}
             groups={report.suspectedGroups}
+            readOnly
             selectedIds={selectedIds}
             title="疑似重复"
             onExpand={(groupId) =>
@@ -556,6 +640,7 @@ function DuplicateGroupList({
   title,
   groups,
   selectedIds,
+  readOnly = false,
   collapsible = false,
   expandedIds,
   onExpand,
@@ -565,6 +650,7 @@ function DuplicateGroupList({
   title: string;
   groups: DuplicateFileGroup[];
   selectedIds: Set<string>;
+  readOnly?: boolean;
   collapsible?: boolean;
   expandedIds?: Set<string>;
   onExpand?: (groupId: string) => void;
@@ -585,7 +671,7 @@ function DuplicateGroupList({
               <label className="check-line">
                 <input
                   checked={groupChecked}
-                  disabled={cleanableFiles.length <= 1}
+                  disabled={readOnly || cleanableFiles.length <= 1}
                   type="checkbox"
                   onChange={(event) => onToggleGroup(group, event.currentTarget.checked)}
                 />
@@ -599,6 +685,7 @@ function DuplicateGroupList({
               )}
             </div>
             <p className="reason">{group.recommendedSelectionReason}</p>
+            {readOnly && <p className="reason">疑似重复仅供查看，不会加入清理。</p>}
             {expanded && (
               <div className="duplicate-file-list">
                 {group.files.map((file) => (
@@ -607,7 +694,7 @@ function DuplicateGroupList({
                       <input
                         aria-label={`${file.displayName} ${file.visibleLocationHint}${file.protected ? " 受保护" : ""}`}
                         checked={selectedIds.has(file.entryId)}
-                        disabled={file.protected}
+                        disabled={readOnly || file.protected}
                         type="checkbox"
                         onChange={(event) => onToggleFile(group, file, event.currentTarget.checked)}
                       />
@@ -674,7 +761,7 @@ function drivePriority(file: DuplicateFileEntry): number {
 function buildCleanupRequest(report: DuplicateScanReport, selectedIds: Set<string>): DuplicateCleanupRequest {
   return {
     protectedOverrideConfirmed: false,
-    groups: [...report.strictGroups, ...report.suspectedGroups]
+    groups: report.strictGroups
       .map((group) => ({
         groupId: group.groupId,
         files: group.files.map((file) => ({

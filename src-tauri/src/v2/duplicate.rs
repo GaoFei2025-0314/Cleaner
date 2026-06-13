@@ -35,7 +35,6 @@ const OPERATION_FINISHED_EVENT: &str = "cleaner-operation-finished";
 struct CandidateFile {
     path: PathBuf,
     path_key: String,
-    display_name: String,
     drive: String,
     visible_location_hint: String,
     size_bytes: u64,
@@ -112,6 +111,22 @@ pub fn scan_duplicate_files(request: DuplicateScanRequest) -> Result<DuplicateSc
     let mut progress = |_| {};
     scan_duplicate_files_internal(request, |_| {}, None, &mut progress, "")
         .map(|outcome| outcome.report)
+}
+
+#[doc(hidden)]
+pub fn scan_duplicate_files_with_backend_settings_for_test(
+    request: DuplicateScanRequest,
+    backend_protected_paths: Result<Vec<String>, String>,
+) -> Result<DuplicateScanReport, String> {
+    let mut progress = |_| {};
+    scan_duplicate_files_with_backend_settings(
+        request,
+        backend_protected_paths,
+        None,
+        &mut progress,
+        "test",
+    )
+    .map(|outcome| outcome.report)
 }
 
 #[doc(hidden)]
@@ -231,11 +246,6 @@ where
             let candidate = CandidateFile {
                 path: path.to_path_buf(),
                 path_key,
-                display_name: path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("file")
-                    .to_string(),
                 drive: drive_label(path),
                 visible_location_hint: visible_location_hint(path),
                 size_bytes,
@@ -296,6 +306,27 @@ where
         },
         backend_entries,
     })
+}
+
+fn scan_duplicate_files_with_backend_settings<P>(
+    request: DuplicateScanRequest,
+    backend_protected_paths: Result<Vec<String>, String>,
+    cancelled: Option<&AtomicBool>,
+    progress: &mut P,
+    operation_id: &str,
+) -> Result<DuplicateScanOutcome, String>
+where
+    P: FnMut(OperationProgressPayload),
+{
+    let backend_protected_paths =
+        backend_protected_paths.map_err(|_| scan_settings_unavailable_error())?;
+    scan_duplicate_files_internal(
+        request_with_backend_protected_paths(request, backend_protected_paths),
+        |_| {},
+        cancelled,
+        progress,
+        operation_id,
+    )
 }
 
 pub fn apply_duplicate_recommendations(
@@ -671,9 +702,11 @@ pub fn start_duplicate_scan(
             let mut progress = |payload| {
                 emit_progress_payload(&app_handle, payload);
             };
-            scan_duplicate_files_internal(
+            let backend_protected_paths = crate::v2::settings::get_cleaner_settings(&app_handle)
+                .map(|settings| settings.protected_paths);
+            scan_duplicate_files_with_backend_settings(
                 request,
-                |_| {},
+                backend_protected_paths,
                 Some(&cancelled),
                 &mut progress,
                 &operation_id_for_thread,
@@ -766,65 +799,72 @@ pub fn start_duplicate_cleanup(
                     Some("操作已取消".to_string()),
                 )
             } else {
-                let started_at = now_rfc3339();
-                let backend_protected_paths = crate::v2::settings::get_cleaner_settings(&app_handle)
-                    .map(|settings| settings.protected_paths)
-                    .unwrap_or_default();
-                let cleanup_result = {
-                    let registry = app_handle.state::<DuplicateEntryRegistry>();
-                    let mut progress = |payload| {
-                        emit_progress_payload(&app_handle, payload);
-                    };
-                    run_duplicate_cleanup_internal(
-                        request,
-                        &registry,
-                        &SystemRecycleBin,
-                        &backend_protected_paths,
-                        Some(&cancelled),
-                        |_| {},
-                        |_| {},
-                        &mut progress,
-                        &operation_id_for_thread,
-                    )
-                };
-                let cancelled_after_cleanup = cancelled.load(Ordering::Relaxed);
-                let report = match cleanup_result {
-                    Ok(report) | Err(report) => report,
-                };
-                let finished_at = now_rfc3339();
-                if !cancelled_after_cleanup {
-                    let _ = append_history_entry(
-                        &app_handle,
-                        HistoryEntry {
-                            history_id: uuid::Uuid::new_v4().to_string(),
-                            module: OperationModule::DuplicateCleanup,
-                            started_at,
-                            finished_at,
-                            total_bytes: report.freed_bytes,
-                            freed_bytes: report.freed_bytes,
-                            c_drive_freed_bytes: report.c_drive_freed_bytes,
-                            other_drive_freed_bytes: report.other_drive_freed_bytes,
-                            success_count: report.success_count,
-                            skipped_count: report.skipped_count,
-                            failed_count: report.failed_count,
-                            error_categories: cleanup_error_categories(&report),
-                        },
-                    );
-                }
+                match crate::v2::settings::get_cleaner_settings(&app_handle) {
+                    Err(_) => (
+                        OperationStatus::Failed,
+                        serde_json::Value::Null,
+                        Some(cleanup_settings_unavailable_error()),
+                    ),
+                    Ok(settings) => {
+                        let started_at = now_rfc3339();
+                        let backend_protected_paths = settings.protected_paths;
+                        let cleanup_result = {
+                            let registry = app_handle.state::<DuplicateEntryRegistry>();
+                            let mut progress = |payload| {
+                                emit_progress_payload(&app_handle, payload);
+                            };
+                            run_duplicate_cleanup_internal(
+                                request,
+                                &registry,
+                                &SystemRecycleBin,
+                                &backend_protected_paths,
+                                Some(&cancelled),
+                                |_| {},
+                                |_| {},
+                                &mut progress,
+                                &operation_id_for_thread,
+                            )
+                        };
+                        let cancelled_after_cleanup = cancelled.load(Ordering::Relaxed);
+                        let report = match cleanup_result {
+                            Ok(report) | Err(report) => report,
+                        };
+                        let finished_at = now_rfc3339();
+                        if !cancelled_after_cleanup {
+                            let _ = append_history_entry(
+                                &app_handle,
+                                HistoryEntry {
+                                    history_id: uuid::Uuid::new_v4().to_string(),
+                                    module: OperationModule::DuplicateCleanup,
+                                    started_at,
+                                    finished_at,
+                                    total_bytes: report.freed_bytes,
+                                    freed_bytes: report.freed_bytes,
+                                    c_drive_freed_bytes: report.c_drive_freed_bytes,
+                                    other_drive_freed_bytes: report.other_drive_freed_bytes,
+                                    success_count: report.success_count,
+                                    skipped_count: report.skipped_count,
+                                    failed_count: report.failed_count,
+                                    error_categories: cleanup_error_categories(&report),
+                                },
+                            );
+                        }
 
-                emit_progress_payload(
-                    &app_handle,
-                    cleanup_finished_progress_payload(&operation_id_for_thread, &report),
-                );
-                (
-                    if cancelled_after_cleanup {
-                        OperationStatus::Cancelled
-                    } else {
-                        OperationStatus::Completed
-                    },
-                    serde_json::to_value(report).unwrap_or(serde_json::Value::Null),
-                    cancelled_after_cleanup.then(|| "操作已取消".to_string()),
-                )
+                        emit_progress_payload(
+                            &app_handle,
+                            cleanup_finished_progress_payload(&operation_id_for_thread, &report),
+                        );
+                        (
+                            if cancelled_after_cleanup {
+                                OperationStatus::Cancelled
+                            } else {
+                                OperationStatus::Completed
+                            },
+                            serde_json::to_value(report).unwrap_or(serde_json::Value::Null),
+                            cancelled_after_cleanup.then(|| "操作已取消".to_string()),
+                        )
+                    }
+                }
             };
 
         emit_finished(
@@ -857,6 +897,31 @@ fn scan_roots(request: &DuplicateScanRequest) -> Vec<PathBuf> {
         }
     }
     roots
+}
+
+fn request_with_backend_protected_paths(
+    mut request: DuplicateScanRequest,
+    backend_protected_paths: Vec<String>,
+) -> DuplicateScanRequest {
+    let mut seen = request
+        .protected_paths
+        .iter()
+        .cloned()
+        .collect::<HashSet<_>>();
+    for protected_path in backend_protected_paths {
+        if seen.insert(protected_path.clone()) {
+            request.protected_paths.push(protected_path);
+        }
+    }
+    request
+}
+
+fn scan_settings_unavailable_error() -> String {
+    "无法读取清理设置，扫描已停止".to_string()
+}
+
+fn cleanup_settings_unavailable_error() -> String {
+    "无法读取清理设置，清理已停止".to_string()
 }
 
 fn allowed_extensions(
@@ -955,7 +1020,8 @@ where
             let total_bytes = files.iter().map(|file| file.size_bytes).sum();
             let mut entries = files
                 .into_iter()
-                .map(|file| {
+                .enumerate()
+                .map(|(index, file)| {
                     let entry_id = uuid::Uuid::new_v4().to_string();
                     backend_entries.push(DuplicateBackendEntry {
                         entry_id: entry_id.clone(),
@@ -964,7 +1030,7 @@ where
                         path_key: file.path_key.clone(),
                         protected: file.protected,
                     });
-                    duplicate_entry(file, entry_id, fingerprint_id.clone())
+                    duplicate_entry(file, entry_id, fingerprint_id.clone(), false, index + 1)
                 })
                 .collect::<Vec<_>>();
             entries.sort_by(|left, right| left.display_name.cmp(&right.display_name));
@@ -1028,11 +1094,14 @@ fn suspected_duplicate_groups(candidates: Vec<CandidateFile>) -> Vec<DuplicateFi
         let total_bytes = files.iter().map(|file| file.size_bytes).sum();
         let mut entries = files
             .into_iter()
-            .map(|file| {
+            .enumerate()
+            .map(|(index, file)| {
                 let mut entry = duplicate_entry(
                     file,
                     uuid::Uuid::new_v4().to_string(),
                     uuid::Uuid::new_v4().to_string(),
+                    true,
+                    index + 1,
                 );
                 entry.recommended_action = DuplicateRecommendedAction::ManualReview;
                 entry
@@ -1056,10 +1125,12 @@ fn duplicate_entry(
     file: CandidateFile,
     entry_id: String,
     fingerprint_id: String,
+    suspected: bool,
+    ordinal: usize,
 ) -> DuplicateFileEntry {
     DuplicateFileEntry {
         entry_id,
-        display_name: file.display_name,
+        display_name: anonymized_duplicate_display_name(suspected, ordinal),
         drive: file.drive,
         visible_location_hint: file.visible_location_hint,
         size_bytes: file.size_bytes,
@@ -1150,15 +1221,18 @@ fn file_fingerprint_with_cancel(
 
 fn visible_location_hint(path: &Path) -> String {
     let drive = drive_label(path);
-    let parent_name = path
-        .parent()
-        .and_then(|parent| parent.file_name())
-        .and_then(|name| name.to_str())
-        .unwrap_or("folder");
     if drive.is_empty() {
-        parent_name.to_string()
+        "文件夹".to_string()
     } else {
-        format!("{drive}\\...\\{parent_name}")
+        format!("{} 盘 · 文件夹", drive.trim_end_matches(':'))
+    }
+}
+
+fn anonymized_duplicate_display_name(suspected: bool, ordinal: usize) -> String {
+    if suspected {
+        format!("疑似重复 {ordinal}")
+    } else {
+        format!("重复文件 {ordinal}")
     }
 }
 

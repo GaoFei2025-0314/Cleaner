@@ -163,7 +163,7 @@ fn large_file_location_hint_does_not_expose_user_or_parent_folder_names() {
     let hint = visible_location_hint(Path::new(r"C:\Users\Alice\big.iso"));
     assert!(!hint.contains("Alice"));
     assert!(!hint.contains(r"C:\Users\Alice"));
-    assert_eq!(hint, r"C:\...\用户文件");
+    assert_eq!(hint, "C 盘 · 用户文件");
     assert_eq!(
         visible_location_hint(Path::new(r"relative\Alice\big.iso")),
         "文件夹"

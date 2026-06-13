@@ -445,9 +445,9 @@ pub fn visible_location_hint(path: &Path) -> String {
     if drive.is_empty() {
         "文件夹".to_string()
     } else if is_c_drive_user_profile_file(path) {
-        format!("{drive}\\...\\用户文件")
+        format!("{} 盘 · 用户文件", drive.trim_end_matches(':'))
     } else {
-        format!("{drive}\\...\\文件夹")
+        format!("{} 盘 · 文件夹", drive.trim_end_matches(':'))
     }
 }
 

@@ -594,6 +594,46 @@ button {
   gap: 9px;
 }
 
+.folder-input-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+
+.folder-input-row .inline-field {
+  align-items: start;
+  flex-direction: column;
+}
+
+.folder-input-row .inline-field input {
+  width: min(460px, 70vw);
+}
+
+.folder-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.folder-chip {
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #cfe0dd;
+  border-radius: 8px;
+  padding: 6px 8px;
+  color: #244145;
+  background: #f3faf8;
+  overflow-wrap: anywhere;
+}
+
+.folder-chip button {
+  color: #8b3d2b;
+  cursor: pointer;
+}
+
 .duplicate-size-field {
   width: fit-content;
 }

@@ -29,9 +29,9 @@ export const mockDuplicateScanReport: DuplicateScanReport = {
       files: [
         {
           entryId: "dup-strict-001-a",
-          displayName: "project-export-copy.pdf",
+          displayName: "重复文件 1",
           drive: "C:",
-          visibleLocationHint: "C drive / Documents",
+          visibleLocationHint: "C 盘 · 文件夹",
           sizeBytes: 367_001_600,
           modifiedAt: "2026-05-28T08:30:00.000Z",
           hashFingerprintId: "fp-preview-a",
@@ -41,9 +41,9 @@ export const mockDuplicateScanReport: DuplicateScanReport = {
         },
         {
           entryId: "dup-strict-001-b",
-          displayName: "project-export-copy.pdf",
+          displayName: "重复文件 2",
           drive: "D:",
-          visibleLocationHint: "D drive / Archive",
+          visibleLocationHint: "D 盘 · 文件夹",
           sizeBytes: 367_001_600,
           modifiedAt: "2026-05-21T11:15:00.000Z",
           hashFingerprintId: "fp-preview-a",
@@ -64,9 +64,9 @@ export const mockDuplicateScanReport: DuplicateScanReport = {
       files: [
         {
           entryId: "dup-suspected-001-a",
-          displayName: "media-cache-preview.mp4",
+          displayName: "疑似重复 1",
           drive: "C:",
-          visibleLocationHint: "C drive / Temp",
+          visibleLocationHint: "C 盘 · 文件夹",
           sizeBytes: 125_829_120,
           modifiedAt: "2026-05-20T10:00:00.000Z",
           hashFingerprintId: "fp-suspected-a",
@@ -76,9 +76,9 @@ export const mockDuplicateScanReport: DuplicateScanReport = {
         },
         {
           entryId: "dup-suspected-001-b",
-          displayName: "media-cache-preview (copy).mp4",
+          displayName: "疑似重复 2",
           drive: "C:",
-          visibleLocationHint: "C drive / Downloads",
+          visibleLocationHint: "C 盘 · 文件夹",
           sizeBytes: 125_829_120,
           modifiedAt: "2026-05-19T09:45:00.000Z",
           hashFingerprintId: "fp-suspected-b",
@@ -100,9 +100,9 @@ export const mockLargeFileScanReport: LargeFileScanReport = {
   items: [
     {
       itemId: "large-c-001",
-      displayName: "large-video-file.mp4",
+      displayName: "视频文件 1",
       drive: "C:",
-      visibleLocationHint: "C drive / Videos",
+      visibleLocationHint: "C 盘 · 用户文件",
       sizeBytes: 4_294_967_296,
       modifiedAt: "2026-05-12T14:00:00.000Z",
       category: "video",
@@ -112,9 +112,9 @@ export const mockLargeFileScanReport: LargeFileScanReport = {
     },
     {
       itemId: "large-c-002",
-      displayName: "installer-package.iso",
+      displayName: "磁盘镜像 1",
       drive: "C:",
-      visibleLocationHint: "C drive / Downloads",
+      visibleLocationHint: "C 盘 · 用户文件",
       sizeBytes: 2_147_483_648,
       modifiedAt: "2026-04-02T12:00:00.000Z",
       category: "diskImage",
@@ -124,9 +124,9 @@ export const mockLargeFileScanReport: LargeFileScanReport = {
     },
     {
       itemId: "large-protected-001",
-      displayName: "protected-archive.zip",
+      displayName: "压缩包 1",
       drive: "C:",
-      visibleLocationHint: "C drive / Protected app data",
+      visibleLocationHint: "C 盘 · 文件夹",
       sizeBytes: 805_306_368,
       modifiedAt: "2026-03-15T09:00:00.000Z",
       category: "archive",

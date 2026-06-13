@@ -66,6 +66,8 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
   const [step, setStep] = useState<LargeFileStep>("settings");
   const [settings, setSettings] = useState<CleanerSettings | null>(null);
   const [selectedDrives, setSelectedDrives] = useState(["C:"]);
+  const [customFolders, setCustomFolders] = useState<string[]>([]);
+  const [customFolderInput, setCustomFolderInput] = useState("");
   const [minSizeBytes, setMinSizeBytes] = useState(500 * 1024 * 1024);
   const [customThresholdMb, setCustomThresholdMb] = useState(500);
   const [originalFilePolicy, setOriginalFilePolicy] = useState<OriginalFilePolicy>("keepOriginal");
@@ -218,6 +220,17 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
     setMinSizeBytes(nextMb * 1024 * 1024);
   }
 
+  function addCustomFolder() {
+    const folder = customFolderInput.trim();
+    if (!folder) return;
+    setCustomFolders((current) => Array.from(new Set([...current, folder])));
+    setCustomFolderInput("");
+  }
+
+  function removeCustomFolder(folder: string) {
+    setCustomFolders((current) => current.filter((item) => item !== folder));
+  }
+
   async function beginScan() {
     if (!settings) {
       setError("设置仍在加载中，请稍后再开始扫描。");
@@ -226,7 +239,7 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
 
     const request: LargeFileScanRequest = {
       selectedDrives,
-      customFolders: [],
+      customFolders,
       minSizeBytes,
       protectedPaths: settings.protectedPaths,
       skipSystemDirs: true,
@@ -359,6 +372,34 @@ export function LargeFileMigrationPage({ onBlockingWorkChange }: LargeFileMigrat
                 </label>
               ))}
             </div>
+          </div>
+          <div className="duplicate-option-block">
+            <strong>自定义文件夹</strong>
+            <div className="folder-input-row">
+              <label className="inline-field">
+                <span>文件夹路径</span>
+                <input
+                  value={customFolderInput}
+                  placeholder="例如 D:\\Downloads"
+                  onChange={(event) => setCustomFolderInput(event.currentTarget.value)}
+                />
+              </label>
+              <button className="secondary-button" type="button" onClick={addCustomFolder}>
+                添加文件夹
+              </button>
+            </div>
+            {customFolders.length > 0 && (
+              <div className="folder-chip-list">
+                {customFolders.map((folder) => (
+                  <span key={folder} className="folder-chip">
+                    {folder}
+                    <button type="button" aria-label={`移除 ${folder}`} onClick={() => removeCustomFolder(folder)}>
+                      移除
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
           <div className="duplicate-option-block">
             <strong>最小文件大小</strong>

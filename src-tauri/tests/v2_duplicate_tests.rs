@@ -8,6 +8,7 @@ use c_drive_cleaner::v2::duplicate::{
     run_duplicate_cleanup_cancellable_before_recycle_for_test,
     run_duplicate_cleanup_cancellable_for_test, run_duplicate_cleanup_with_progress_for_test,
     scan_duplicate_files, scan_duplicate_files_cancellable_for_test,
+    scan_duplicate_files_with_backend_settings_for_test,
     scan_duplicate_files_with_before_hash_for_test, scan_duplicate_files_with_progress_for_test,
     DuplicateEntryRegistry,
 };
@@ -107,11 +108,12 @@ fn unreadable_candidate_during_hashing_is_skipped_without_aborting_scan() {
 
     assert_eq!(report.strict_groups.len(), 1);
     assert_eq!(report.strict_groups[0].files.len(), 2);
-    assert!(report.strict_groups[0]
-        .files
-        .iter()
-        .all(|file| file.display_name.starts_with("keep-")));
     assert_eq!(report.skipped_locations, 1);
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(!json.contains("keep-a"));
+    assert!(!json.contains("keep-b"));
+    assert!(!json.contains("disappearing"));
+    assert!(!json.contains(&temp.path().display().to_string()));
 }
 
 #[test]
@@ -139,7 +141,7 @@ fn protected_duplicate_files_are_reported_but_not_auto_selected() {
     let protected_file = report.strict_groups[0]
         .files
         .iter()
-        .find(|file| file.display_name == "protected-copy.txt")
+        .find(|file| file.protected)
         .unwrap();
     assert!(protected_file.protected);
     assert!(!protected_file.selected);
@@ -147,6 +149,69 @@ fn protected_duplicate_files_are_reported_but_not_auto_selected() {
         protected_file.recommended_action,
         DuplicateRecommendedAction::Clean
     );
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(!json.contains("protected-copy.txt"));
+    assert!(!json.contains("public-copy.txt"));
+    assert!(!json.contains(&protected_dir.to_string_lossy().to_string()));
+}
+
+#[test]
+fn backend_protected_paths_mark_duplicate_scan_items_when_request_omits_them() {
+    let temp = tempfile::tempdir().unwrap();
+    let protected_dir = temp.path().join("protected-root");
+    let public_dir = temp.path().join("public");
+    fs::create_dir_all(&protected_dir).unwrap();
+    fs::create_dir_all(&public_dir).unwrap();
+    fs::write(protected_dir.join("Alice-private-copy.txt"), b"same").unwrap();
+    fs::write(public_dir.join("ordinary-copy.txt"), b"same").unwrap();
+
+    let report = scan_duplicate_files_with_backend_settings_for_test(
+        DuplicateScanRequest {
+            selected_drives: vec![],
+            custom_folders: vec![temp.path().to_string_lossy().to_string()],
+            file_types: vec![DuplicateFileType::Document],
+            custom_extensions: vec![],
+            include_suspected: false,
+            min_size_bytes: 1,
+            protected_paths: vec![],
+        },
+        Ok(vec![protected_dir.to_string_lossy().to_string()]),
+    )
+    .unwrap();
+    let json = serde_json::to_string(&report).unwrap();
+
+    assert_eq!(report.strict_groups.len(), 1);
+    assert!(report.strict_groups[0].files.iter().any(|file| file.protected));
+    assert!(report.strict_groups[0]
+        .files
+        .iter()
+        .all(|file| !file.display_name.contains("Alice")));
+    assert!(!json.contains("Alice-private-copy.txt"));
+    assert!(!json.contains("ordinary-copy.txt"));
+    assert!(!json.contains(&protected_dir.to_string_lossy().to_string()));
+}
+
+#[test]
+fn duplicate_scan_settings_failure_returns_path_free_error() {
+    let temp = tempfile::tempdir().unwrap();
+    let error = scan_duplicate_files_with_backend_settings_for_test(
+        DuplicateScanRequest {
+            selected_drives: vec![],
+            custom_folders: vec![temp.path().join("Alice").to_string_lossy().to_string()],
+            file_types: vec![DuplicateFileType::Document],
+            custom_extensions: vec![],
+            include_suspected: false,
+            min_size_bytes: 1,
+            protected_paths: vec![],
+        },
+        Err(r"C:\Users\Alice\AppData\settings.json".to_string()),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("无法读取清理设置"));
+    assert!(!error.contains("Alice"));
+    assert!(!error.contains("settings.json"));
+    assert!(!error.contains(r"C:\Users"));
 }
 
 #[test]
@@ -168,14 +233,11 @@ fn custom_tar_gz_extension_matches_complete_filename_suffix() {
     .unwrap();
 
     assert_eq!(report.strict_groups.len(), 1);
-    let names = report.strict_groups[0]
-        .files
-        .iter()
-        .map(|file| file.display_name.as_str())
-        .collect::<Vec<_>>();
-    assert!(names.contains(&"a.tar.gz"));
-    assert!(names.contains(&"b.tar.gz"));
-    assert!(!names.contains(&"c.gz"));
+    assert_eq!(report.strict_groups[0].files.len(), 2);
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(!json.contains("a.tar.gz"));
+    assert!(!json.contains("b.tar.gz"));
+    assert!(!json.contains("c.gz"));
 }
 
 #[test]

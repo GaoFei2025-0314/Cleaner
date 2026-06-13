@@ -104,7 +104,7 @@ fn migration_request_rejects_nested_raw_path_in_scan_report_item() {
                 "itemId": "item-1",
                 "displayName": "movie.mp4",
                 "drive": "C:",
-                "visibleLocationHint": "C:\\...\\用户文件",
+                "visibleLocationHint": "C 盘 · 用户文件",
                 "sizeBytes": 11,
                 "modifiedAt": "2026-06-12T00:00:00Z",
                 "category": "video",
@@ -283,7 +283,7 @@ fn migration_copies_and_verifies_size_and_hash_before_recycle() {
 }
 
 #[test]
-fn recycle_failure_counts_copied_but_not_freed() {
+fn recycle_failure_counts_failed_and_keeps_both_files() {
     let temp = tempfile::tempdir().unwrap();
     let source_dir = temp.path().join("source");
     fs::create_dir_all(&source_dir).unwrap();
@@ -304,10 +304,15 @@ fn recycle_failure_counts_copied_but_not_freed() {
         &recycle_bin,
     );
 
-    assert_eq!(result.copied_count, 1);
+    assert_eq!(result.copied_count, 0);
     assert_eq!(result.moved_to_recycle_bin_count, 0);
-    assert_eq!(result.total_copied_bytes, 11);
+    assert_eq!(result.failed_count, 1);
+    assert_eq!(result.total_copied_bytes, 0);
     assert_eq!(result.total_freed_bytes, 0);
+    assert_eq!(
+        result.item_results[0].message,
+        "原文件移入回收站失败，已保留复制文件和原文件"
+    );
     assert!(target.join("movie.mp4").exists());
     assert!(source.exists());
 }
