@@ -13,6 +13,7 @@ import { ResultStep } from "./components/ResultStep";
 import { ErrorPanel } from "./components/ErrorPanel";
 import { SettingsPage } from "./components/settings/SettingsPage";
 import { HistoryPage } from "./components/history/HistoryPage";
+import { DuplicateCleanerPage } from "./components/duplicate/DuplicateCleanerPage";
 
 type Step = "welcome" | "scan" | "suggestions" | "confirm" | "clean" | "result";
 type FailedAction = "scan" | "clean";
@@ -179,7 +180,7 @@ export default function App() {
       onModuleChange={setActiveModule}
     >
       {activeModule === "cDrive" && cDriveWorkflow}
-      {activeModule === "duplicate" && <PlaceholderPage title="重复文件清理" />}
+      {activeModule === "duplicate" && <DuplicateCleanerPage />}
       {activeModule === "largeFiles" && <PlaceholderPage title="大文件迁移" />}
       {activeModule === "privacy" && (
         <div className="tool-page placeholder-page">
