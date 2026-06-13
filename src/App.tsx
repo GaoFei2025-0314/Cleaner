@@ -14,6 +14,7 @@ import { ErrorPanel } from "./components/ErrorPanel";
 import { SettingsPage } from "./components/settings/SettingsPage";
 import { HistoryPage } from "./components/history/HistoryPage";
 import { DuplicateCleanerPage } from "./components/duplicate/DuplicateCleanerPage";
+import { LargeFileMigrationPage } from "./components/large-files/LargeFileMigrationPage";
 
 type Step = "welcome" | "scan" | "suggestions" | "confirm" | "clean" | "result";
 type FailedAction = "scan" | "clean";
@@ -40,6 +41,7 @@ export default function App() {
   const [scanProgress, setScanProgress] = useState(0);
   const [cleanProgress, setCleanProgress] = useState(0);
   const [duplicateBlockingWork, setDuplicateBlockingWork] = useState(false);
+  const [largeFileBlockingWork, setLargeFileBlockingWork] = useState(false);
   const [analyticsEnabled, setAnalyticsEnabled] = useState(
     () => localStorage.getItem("analyticsEnabled") !== "false",
   );
@@ -128,6 +130,7 @@ export default function App() {
     hasReport: report !== null,
     step,
   });
+  const hasAnyBlockingWork = hasBlockingWork || duplicateBlockingWork || largeFileBlockingWork;
 
   const cDriveWorkflow = (
     <AppShell currentStep={stepIndex[step]} report={report}>
@@ -177,12 +180,12 @@ export default function App() {
   return (
     <SidebarShell
       activeModule={activeModule}
-      hasBlockingWork={hasBlockingWork || duplicateBlockingWork}
+      hasBlockingWork={hasAnyBlockingWork}
       onModuleChange={setActiveModule}
     >
       {activeModule === "cDrive" && cDriveWorkflow}
       {activeModule === "duplicate" && <DuplicateCleanerPage onBlockingWorkChange={setDuplicateBlockingWork} />}
-      {activeModule === "largeFiles" && <PlaceholderPage title="大文件迁移" />}
+      {activeModule === "largeFiles" && <LargeFileMigrationPage onBlockingWorkChange={setLargeFileBlockingWork} />}
       {activeModule === "privacy" && (
         <div className="tool-page placeholder-page">
           <p className="eyebrow">Privacy</p>
