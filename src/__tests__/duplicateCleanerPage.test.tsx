@@ -126,9 +126,20 @@ const cleanupReport: DuplicateCleanupReport = {
 const apiMock = vi.hoisted(() => ({
   progressListener: undefined as ((payload: OperationProgressPayload) => void) | undefined,
   finishedListener: undefined as ((payload: OperationFinishedPayload) => void) | undefined,
+  unsubscribeProgress: vi.fn(async () => undefined),
+  unsubscribeFinished: vi.fn(async () => undefined),
   getCleanerSettings: vi.fn(async () => settings),
   startDuplicateScan: vi.fn(async () => ({ operationId: "scan-op" })),
   startDuplicateCleanup: vi.fn(async () => ({ operationId: "clean-op" })),
+  cancelOperation: vi.fn(async () => true),
+  onCleanerOperationProgress: vi.fn(async (listener) => {
+    apiMock.progressListener = listener;
+    return apiMock.unsubscribeProgress;
+  }),
+  onCleanerOperationFinished: vi.fn(async (listener) => {
+    apiMock.finishedListener = listener;
+    return apiMock.unsubscribeFinished;
+  }),
 }));
 
 vi.mock("../services/v2Api", () => {
@@ -136,15 +147,9 @@ vi.mock("../services/v2Api", () => {
     getCleanerSettings: apiMock.getCleanerSettings,
     startDuplicateScan: apiMock.startDuplicateScan,
     startDuplicateCleanup: apiMock.startDuplicateCleanup,
-    cancelOperation: vi.fn(async () => true),
-    onCleanerOperationProgress: vi.fn(async (listener) => {
-      apiMock.progressListener = listener;
-      return vi.fn(async () => undefined);
-    }),
-    onCleanerOperationFinished: vi.fn(async (listener) => {
-      apiMock.finishedListener = listener;
-      return vi.fn(async () => undefined);
-    }),
+    cancelOperation: apiMock.cancelOperation,
+    onCleanerOperationProgress: apiMock.onCleanerOperationProgress,
+    onCleanerOperationFinished: apiMock.onCleanerOperationFinished,
   };
 });
 
@@ -154,6 +159,15 @@ beforeEach(() => {
   apiMock.getCleanerSettings.mockImplementation(async () => settings);
   apiMock.startDuplicateScan.mockImplementation(async () => ({ operationId: "scan-op" }));
   apiMock.startDuplicateCleanup.mockImplementation(async () => ({ operationId: "clean-op" }));
+  apiMock.cancelOperation.mockImplementation(async () => true);
+  apiMock.onCleanerOperationProgress.mockImplementation(async (listener) => {
+    apiMock.progressListener = listener;
+    return apiMock.unsubscribeProgress;
+  });
+  apiMock.onCleanerOperationFinished.mockImplementation(async (listener) => {
+    apiMock.finishedListener = listener;
+    return apiMock.unsubscribeFinished;
+  });
 });
 
 afterEach(() => {
@@ -241,6 +255,60 @@ describe("DuplicateCleanerPage", () => {
     expect(screen.getByText("321")).toBeInTheDocument();
     expect(screen.getByText("发现重复组").parentElement).toHaveTextContent("4");
     expect(screen.getByText("发现文件").parentElement).toHaveTextContent("9");
+  });
+
+  it("cleans up active duplicate operation listeners and cancels when unmounted", async () => {
+    apiMock.unsubscribeProgress.mockClear();
+    apiMock.unsubscribeFinished.mockClear();
+    apiMock.cancelOperation.mockClear();
+    const { unmount } = render(<DuplicateCleanerPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /开始扫描/ }));
+    await waitFor(() => expect(apiMock.startDuplicateScan).toHaveBeenCalled());
+
+    unmount();
+
+    await waitFor(() => expect(apiMock.unsubscribeProgress).toHaveBeenCalledTimes(1));
+    expect(apiMock.unsubscribeFinished).toHaveBeenCalledTimes(1);
+    expect(apiMock.cancelOperation).toHaveBeenCalledWith("scan-op");
+  });
+
+  it("reports duplicate blocking work while scanning and after unfinished results", async () => {
+    const onBlockingWorkChange = vi.fn();
+    render(<DuplicateCleanerPage onBlockingWorkChange={onBlockingWorkChange} />);
+
+    await waitFor(() => expect(onBlockingWorkChange).toHaveBeenLastCalledWith(false));
+
+    fireEvent.click(await screen.findByRole("button", { name: /开始扫描/ }));
+    await waitFor(() => expect(onBlockingWorkChange).toHaveBeenLastCalledWith(true));
+
+    act(() => {
+      apiMock.finishedListener?.({
+        operationId: "scan-op",
+        module: "duplicateScan",
+        status: "completed",
+        result: report,
+        message: null,
+      });
+    });
+
+    await screen.findByRole("heading", { name: /扫描结果/ });
+    expect(onBlockingWorkChange).toHaveBeenLastCalledWith(true);
+
+    fireEvent.click(screen.getByRole("button", { name: /返回设置/ }));
+    await waitFor(() => expect(onBlockingWorkChange).toHaveBeenLastCalledWith(false));
+  });
+
+  it("cleans up partial listeners and restores settings when duplicate scan subscription fails", async () => {
+    apiMock.onCleanerOperationFinished.mockRejectedValueOnce(new Error("listener failed"));
+    render(<DuplicateCleanerPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /开始扫描/ }));
+
+    expect(await screen.findByText(/重复文件扫描启动失败/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /开始扫描/ })).toBeInTheDocument();
+    expect(apiMock.unsubscribeProgress).toHaveBeenCalledTimes(1);
+    expect(apiMock.startDuplicateScan).not.toHaveBeenCalled();
   });
 
   it("ignores scan events until the start call returns the operation id", async () => {

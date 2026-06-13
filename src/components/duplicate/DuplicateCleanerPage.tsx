@@ -23,6 +23,10 @@ import {
 } from "../../services/v2Api";
 
 export type DuplicateStep = "settings" | "scanning" | "results" | "confirm" | "cleaning" | "finished";
+type CleanerUnsubscribe = () => Promise<void>;
+type DuplicateCleanerPageProps = {
+  onBlockingWorkChange?: (blocking: boolean) => void;
+};
 
 const fileTypeOptions: Array<{ value: DuplicateFileType; label: string }> = [
   { value: "image", label: "图片" },
@@ -56,7 +60,7 @@ const emptyProgress: OperationProgressPayload = {
   failedCount: 0,
 };
 
-export function DuplicateCleanerPage() {
+export function DuplicateCleanerPage({ onBlockingWorkChange }: DuplicateCleanerPageProps = {}) {
   const [step, setStep] = useState<DuplicateStep>("settings");
   const [settings, setSettings] = useState<CleanerSettings | null>(null);
   const [fileTypes, setFileTypes] = useState<DuplicateFileType[]>(["image", "document", "archive"]);
@@ -72,6 +76,40 @@ export function DuplicateCleanerPage() {
   const [cleanupResult, setCleanupResult] = useState<DuplicateCleanupReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const operationIdRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
+  const unsubscribeProgressRef = useRef<CleanerUnsubscribe | null>(null);
+  const unsubscribeFinishedRef = useRef<CleanerUnsubscribe | null>(null);
+
+  async function cleanupActiveOperation(cancelBackend: boolean) {
+    const operationId = operationIdRef.current;
+    const unsubscribeProgress = unsubscribeProgressRef.current;
+    const unsubscribeFinished = unsubscribeFinishedRef.current;
+    operationIdRef.current = null;
+    unsubscribeProgressRef.current = null;
+    unsubscribeFinishedRef.current = null;
+
+    await Promise.allSettled([
+      unsubscribeProgress?.(),
+      unsubscribeFinished?.(),
+      cancelBackend && operationId ? cancelOperation(operationId) : Promise.resolve(),
+    ]);
+  }
+
+  function safelySetError(message: string) {
+    if (mountedRef.current) setError(message);
+  }
+
+  function safelySetStep(nextStep: DuplicateStep) {
+    if (mountedRef.current) setStep(nextStep);
+  }
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      void cleanupActiveOperation(true);
+    };
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -106,6 +144,18 @@ export function DuplicateCleanerPage() {
     .reduce((sum, file) => sum + file.sizeBytes, 0);
   const otherDriveSelectedBytes = selectedBytes - cDriveSelectedBytes;
 
+  useEffect(() => {
+    const hasUnfinishedSelection = (step === "results" || step === "confirm") && selectedIds.size > 0;
+    const hasUnfinishedResults = (step === "results" || step === "confirm") && report !== null;
+    onBlockingWorkChange?.(step === "scanning" || step === "cleaning" || hasUnfinishedSelection || hasUnfinishedResults);
+  }, [onBlockingWorkChange, report, selectedIds.size, step]);
+
+  useEffect(() => {
+    return () => {
+      onBlockingWorkChange?.(false);
+    };
+  }, [onBlockingWorkChange]);
+
   function updateFileType(type: DuplicateFileType, checked: boolean) {
     const nextTypes = checked ? [...fileTypes, type] : fileTypes.filter((item) => item !== type);
     setFileTypes(nextTypes.length ? Array.from(new Set(nextTypes)) : ["image"]);
@@ -136,25 +186,28 @@ export function DuplicateCleanerPage() {
     setProgress({ ...emptyProgress, module: "duplicateScan", stage: "正在启动扫描" });
     setStep("scanning");
 
-    const unsubscribeProgress = await onCleanerOperationProgress((payload) => {
-      if (payload.module !== "duplicateScan" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
-      setProgress(payload);
-    });
-    const unsubscribeFinished = await onCleanerOperationFinished((payload) => {
-      if (payload.module !== "duplicateScan" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
-      void unsubscribeProgress();
-      void unsubscribeFinished();
-      handleScanFinished(payload as OperationFinishedPayload<DuplicateScanReport>);
-    });
-
     try {
+      unsubscribeProgressRef.current = await onCleanerOperationProgress((payload) => {
+        if (!mountedRef.current) return;
+        if (payload.module !== "duplicateScan" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
+        setProgress(payload);
+      });
+      unsubscribeFinishedRef.current = await onCleanerOperationFinished((payload) => {
+        if (!mountedRef.current) return;
+        if (payload.module !== "duplicateScan" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
+        void cleanupActiveOperation(false);
+        handleScanFinished(payload as OperationFinishedPayload<DuplicateScanReport>);
+      });
       const operation = await startDuplicateScan(request);
+      if (!mountedRef.current) {
+        await cancelOperation(operation.operationId);
+        return;
+      }
       operationIdRef.current = operation.operationId;
     } catch {
-      await unsubscribeProgress();
-      await unsubscribeFinished();
-      setError("重复文件扫描启动失败，本次未执行任何清理。");
-      setStep("settings");
+      await cleanupActiveOperation(false);
+      safelySetError("重复文件扫描启动失败，本次未执行任何清理。");
+      safelySetStep("settings");
     }
   }
 
@@ -179,25 +232,28 @@ export function DuplicateCleanerPage() {
     setProgress({ ...emptyProgress, module: "duplicateCleanup", stage: "正在启动清理" });
     setStep("cleaning");
 
-    const unsubscribeProgress = await onCleanerOperationProgress((payload) => {
-      if (payload.module !== "duplicateCleanup" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
-      setProgress(payload);
-    });
-    const unsubscribeFinished = await onCleanerOperationFinished((payload) => {
-      if (payload.module !== "duplicateCleanup" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
-      void unsubscribeProgress();
-      void unsubscribeFinished();
-      handleCleanupFinished(payload as OperationFinishedPayload<DuplicateCleanupReport>);
-    });
-
     try {
+      unsubscribeProgressRef.current = await onCleanerOperationProgress((payload) => {
+        if (!mountedRef.current) return;
+        if (payload.module !== "duplicateCleanup" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
+        setProgress(payload);
+      });
+      unsubscribeFinishedRef.current = await onCleanerOperationFinished((payload) => {
+        if (!mountedRef.current) return;
+        if (payload.module !== "duplicateCleanup" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
+        void cleanupActiveOperation(false);
+        handleCleanupFinished(payload as OperationFinishedPayload<DuplicateCleanupReport>);
+      });
       const operation = await startDuplicateCleanup(buildCleanupRequest(report, selectedIds));
+      if (!mountedRef.current) {
+        await cancelOperation(operation.operationId);
+        return;
+      }
       operationIdRef.current = operation.operationId;
     } catch {
-      await unsubscribeProgress();
-      await unsubscribeFinished();
-      setError("清理启动失败，本次没有删除任何文件。");
-      setStep("confirm");
+      await cleanupActiveOperation(false);
+      safelySetError("清理启动失败，本次没有删除任何文件。");
+      safelySetStep("confirm");
     }
   }
 

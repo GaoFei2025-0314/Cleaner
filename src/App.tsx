@@ -39,6 +39,7 @@ export default function App() {
   const [failedAction, setFailedAction] = useState<FailedAction | null>(null);
   const [scanProgress, setScanProgress] = useState(0);
   const [cleanProgress, setCleanProgress] = useState(0);
+  const [duplicateBlockingWork, setDuplicateBlockingWork] = useState(false);
   const [analyticsEnabled, setAnalyticsEnabled] = useState(
     () => localStorage.getItem("analyticsEnabled") !== "false",
   );
@@ -176,11 +177,11 @@ export default function App() {
   return (
     <SidebarShell
       activeModule={activeModule}
-      hasBlockingWork={hasBlockingWork}
+      hasBlockingWork={hasBlockingWork || duplicateBlockingWork}
       onModuleChange={setActiveModule}
     >
       {activeModule === "cDrive" && cDriveWorkflow}
-      {activeModule === "duplicate" && <DuplicateCleanerPage />}
+      {activeModule === "duplicate" && <DuplicateCleanerPage onBlockingWorkChange={setDuplicateBlockingWork} />}
       {activeModule === "largeFiles" && <PlaceholderPage title="大文件迁移" />}
       {activeModule === "privacy" && (
         <div className="tool-page placeholder-page">
