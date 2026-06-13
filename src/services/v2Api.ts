@@ -246,7 +246,7 @@ function browserProgressPayload(operation: BrowserOperation, percent: number): O
     module: operation.module,
     stage: percent === 100 ? "完成预览" : "浏览器预览扫描中",
     percent,
-    currentLocationHint: "C drive / Preview",
+    currentLocationHint: "C 盘 · 文件夹",
     currentFileType: operation.module === "largeFileScan" ? "video" : "document",
     scannedFiles: Math.round(420 * (percent / 100)),
     foundGroups: Math.round(mockDuplicateScanReport.strictGroups.length * (percent / 100)),

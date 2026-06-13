@@ -92,8 +92,10 @@ describe("v2Api browser preview", () => {
     vi.useFakeTimers();
     const { onCleanerOperationProgress, startDuplicateScan } = await import("../services/v2Api");
     const progressPercents: number[] = [];
+    const locationHints: string[] = [];
     const unsubscribe = await onCleanerOperationProgress((payload) => {
       progressPercents.push(payload.percent);
+      locationHints.push(payload.currentLocationHint);
     });
 
     await startDuplicateScan();
@@ -105,6 +107,9 @@ describe("v2Api browser preview", () => {
     expect(progressPercents).toContain(0);
     expect(progressPercents).toContain(100);
     expect(progressPercents.length).toBe(countAfterUnsubscribe);
+    expect(locationHints).toContain("C 盘 · 文件夹");
+    expect(locationHints.join("\n")).not.toMatch(/[A-Z]:\\/);
+    expect(locationHints.join("\n")).not.toMatch(/\//);
   });
 
   it("stops active browser operations when all listeners unsubscribe", async () => {
