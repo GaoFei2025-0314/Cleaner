@@ -1,11 +1,12 @@
 import { Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { HistoryEntry, OperationModule } from "../../domain/v2";
+import type { HistoryEntry, HistoryModule } from "../../domain/v2";
 import { clearOperationHistory, listOperationHistory } from "../../services/v2Api";
 
 type HistoryFilter = "cDrive" | "duplicate" | "largeFiles";
 
-const moduleLabels: Record<OperationModule, string> = {
+const moduleLabels: Record<HistoryModule, string> = {
+  cDriveCleanup: "C 盘清理",
   duplicateScan: "重复文件扫描",
   duplicateCleanup: "重复文件清理",
   largeFileScan: "大文件扫描",
@@ -38,7 +39,7 @@ export function HistoryPage() {
   const filteredHistory = useMemo(
     () =>
       history.filter((entry) => {
-        if (filter === "cDrive") return false;
+        if (filter === "cDrive") return entry.module === "cDriveCleanup";
         if (filter === "duplicate") return entry.module === "duplicateCleanup" || entry.module === "duplicateScan";
         return entry.module === "largeFileMigration" || entry.module === "largeFileScan";
       }),

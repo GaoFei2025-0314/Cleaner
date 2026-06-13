@@ -190,6 +190,20 @@ export const mockMigrationResult: MigrationResult = {
 
 export const mockHistory: HistoryEntry[] = [
   {
+    historyId: "history-cdrive-001",
+    module: "cDriveCleanup",
+    startedAt: "2026-06-01T07:30:00.000Z",
+    finishedAt: "2026-06-01T07:32:00.000Z",
+    totalBytes: 901_775_360,
+    freedBytes: 901_775_360,
+    cDriveFreedBytes: 901_775_360,
+    otherDriveFreedBytes: 0,
+    successCount: 8,
+    skippedCount: 1,
+    failedCount: 0,
+    errorCategories: [],
+  },
+  {
     historyId: "history-duplicate-001",
     module: "duplicateCleanup",
     startedAt: "2026-06-01T08:00:00.000Z",

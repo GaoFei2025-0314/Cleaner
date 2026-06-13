@@ -17,6 +17,22 @@ describe("HistoryPage", () => {
     expect(container.textContent).not.toMatch(/\.[a-z0-9]{2,5}\b/i);
   });
 
+  it("shows sanitized C drive cleanup history when the C drive tab is selected", async () => {
+    const { container } = render(<HistoryPage />);
+
+    await screen.findByText("重复文件清理");
+
+    fireEvent.click(screen.getByRole("tab", { name: /C 盘清理/ }));
+
+    expect(await screen.findByRole("cell", { name: "C 盘清理" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "860 MB" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "8" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "1" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "0" })).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/[A-Z]:[\\/][^\s]+/);
+    expect(container.textContent).not.toMatch(/\.[a-z0-9]{2,5}\b/i);
+  });
+
   it("clears operation history", async () => {
     render(<HistoryPage />);
 

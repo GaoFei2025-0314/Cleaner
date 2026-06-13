@@ -121,6 +121,11 @@ export default function App() {
     setSelectedIds(nextIds);
   }
 
+  const hasBlockingCDriveWork =
+    step === "scan" ||
+    step === "clean" ||
+    (activeModule === "cDrive" && report !== null && step !== "result" && selectedIds.length > 0);
+
   const cDriveWorkflow = (
     <AppShell currentStep={stepIndex[step]} report={report}>
       {errorMessage && (
@@ -169,7 +174,7 @@ export default function App() {
   return (
     <SidebarShell
       activeModule={activeModule}
-      hasBlockingWork={step === "scan" || step === "clean"}
+      hasBlockingWork={hasBlockingCDriveWork}
       onModuleChange={setActiveModule}
     >
       {activeModule === "cDrive" && cDriveWorkflow}

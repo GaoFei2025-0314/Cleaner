@@ -6,6 +6,8 @@ export type OperationModule =
   | "largeFileScan"
   | "largeFileMigration";
 
+export type HistoryModule = OperationModule | "cDriveCleanup";
+
 export type OriginalFilePolicy = "keepOriginal" | "moveOriginalToRecycleBin";
 
 export type DuplicateFileType = "image" | "document" | "audio" | "video" | "archive" | "custom";
@@ -62,7 +64,7 @@ export interface CleanerSettings {
 
 export interface HistoryEntry {
   historyId: string;
-  module: OperationModule;
+  module: HistoryModule;
   startedAt: string;
   finishedAt: string;
   totalBytes: number;

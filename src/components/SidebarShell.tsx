@@ -1,6 +1,5 @@
 import {
   Archive,
-  Clock3,
   FolderSearch,
   HardDrive,
   History,
@@ -50,7 +49,7 @@ export function SidebarShell({
     if (module === activeModule) {
       return;
     }
-    if (hasBlockingWork && !window.confirm("当前清理任务仍在进行，确定要切换页面吗？")) {
+    if (hasBlockingWork && !window.confirm("当前清理任务或选择尚未完成，确定要切换页面吗？")) {
       return;
     }
     onModuleChange(module);

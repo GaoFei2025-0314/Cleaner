@@ -58,7 +58,7 @@ describe("SidebarShell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /设置/ }));
 
-    expect(confirmSpy).toHaveBeenCalled();
+    expect(confirmSpy).toHaveBeenCalledWith("当前清理任务或选择尚未完成，确定要切换页面吗？");
     expect(onModuleChange).not.toHaveBeenCalled();
 
     confirmSpy.mockRestore();
