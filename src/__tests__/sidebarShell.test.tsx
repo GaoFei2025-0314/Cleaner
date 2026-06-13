@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { hasBlockingCDriveWork } from "../App";
 import { SidebarShell, type CleanerModule } from "../components/SidebarShell";
 
 describe("SidebarShell", () => {
@@ -62,5 +63,15 @@ describe("SidebarShell", () => {
     expect(onModuleChange).not.toHaveBeenCalled();
 
     confirmSpy.mockRestore();
+  });
+
+  it("treats scanned C drive results as blocking even when all selections are empty", () => {
+    expect(
+      hasBlockingCDriveWork({
+        activeModule: "cDrive",
+        hasReport: true,
+        step: "suggestions",
+      }),
+    ).toBe(true);
   });
 });

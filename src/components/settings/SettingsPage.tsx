@@ -24,12 +24,18 @@ export function SettingsPage() {
 
   useEffect(() => {
     let cancelled = false;
-    void getDefaultCleanerSettings().then((nextSettings) => {
-      if (cancelled) return;
-      setSettings(nextSettings);
-      setCustomThresholdMb(Math.round(nextSettings.largeFileDefaultThresholdBytes / 1024 / 1024));
-      setStatus("设置已载入");
-    });
+    void getDefaultCleanerSettings()
+      .then((nextSettings) => {
+        if (cancelled) return;
+        const safeSettings = sanitizeSettings(nextSettings, defaultFallbackSettings());
+        setSettings(safeSettings);
+        setCustomThresholdMb(bytesToMb(safeSettings.largeFileDefaultThresholdBytes));
+        setStatus("设置已载入");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setStatus("设置加载失败，请稍后重试");
+      });
     return () => {
       cancelled = true;
     };
@@ -74,9 +80,18 @@ export function SettingsPage() {
   async function save() {
     if (!settings) return;
     setStatus("正在保存...");
-    const saved = await saveCleanerSettings(settings);
-    setSettings(saved);
-    setStatus("设置已保存");
+    const safeSettings = sanitizeSettings(settings, settings);
+    setSettings(safeSettings);
+    setCustomThresholdMb(bytesToMb(safeSettings.largeFileDefaultThresholdBytes));
+    try {
+      const saved = await saveCleanerSettings(safeSettings);
+      const safeSaved = sanitizeSettings(saved, safeSettings);
+      setSettings(safeSaved);
+      setCustomThresholdMb(bytesToMb(safeSaved.largeFileDefaultThresholdBytes));
+      setStatus("设置已保存");
+    } catch {
+      setStatus("设置保存失败，本次未修改设置");
+    }
   }
 
   return (
@@ -135,10 +150,12 @@ export function SettingsPage() {
                 type="radio"
                 onChange={() => {
                   if (option.value === "custom") {
-                    updateSettings({ ...settings, largeFileDefaultThresholdBytes: customThresholdMb * 1024 * 1024 });
+                    const nextThreshold = toPositiveInteger(customThresholdMb, 500);
+                    setCustomThresholdMb(nextThreshold);
+                    updateSettings({ ...settings, largeFileDefaultThresholdBytes: nextThreshold * 1024 * 1024 });
                   } else {
                     updateSettings({ ...settings, largeFileDefaultThresholdBytes: option.value });
-                    setCustomThresholdMb(Math.round(option.value / 1024 / 1024));
+                    setCustomThresholdMb(bytesToMb(option.value));
                   }
                 }}
               />
@@ -152,7 +169,7 @@ export function SettingsPage() {
               type="number"
               value={customThresholdMb}
               onChange={(event) => {
-                const nextValue = Number(event.currentTarget.value);
+                const nextValue = toPositiveInteger(event.currentTarget.value, customThresholdMb || 500);
                 setCustomThresholdMb(nextValue);
                 updateSettings({ ...settings, largeFileDefaultThresholdBytes: nextValue * 1024 * 1024 });
               }}
@@ -171,7 +188,10 @@ export function SettingsPage() {
             type="number"
             value={settings.historyRetentionDays}
             onChange={(event) =>
-              updateSettings({ ...settings, historyRetentionDays: Number(event.currentTarget.value) })
+              updateSettings({
+                ...settings,
+                historyRetentionDays: toPositiveInteger(event.currentTarget.value, settings.historyRetentionDays || 30),
+              })
             }
           />
         </label>
@@ -229,6 +249,45 @@ export function SettingsPage() {
       </p>
     </div>
   );
+}
+
+function bytesToMb(bytes: number): number {
+  return toPositiveInteger(Math.round(bytes / 1024 / 1024), 500);
+}
+
+function toPositiveInteger(value: string | number, fallback: number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return Math.max(1, Math.trunc(fallback) || 1);
+  }
+  return Math.max(1, Math.trunc(parsed));
+}
+
+function sanitizeSettings(settings: CleanerSettings, fallback: CleanerSettings): CleanerSettings {
+  const thresholdMb = toPositiveInteger(
+    bytesToMb(settings.largeFileDefaultThresholdBytes),
+    bytesToMb(fallback.largeFileDefaultThresholdBytes),
+  );
+
+  return {
+    ...settings,
+    defaultScanDrives: settings.defaultScanDrives.length ? settings.defaultScanDrives : ["C:"],
+    largeFileDefaultThresholdBytes: thresholdMb * 1024 * 1024,
+    historyRetentionDays: toPositiveInteger(settings.historyRetentionDays, fallback.historyRetentionDays),
+  };
+}
+
+function defaultFallbackSettings(): CleanerSettings {
+  return {
+    protectedPaths: [],
+    defaultScanDrives: ["C:"],
+    duplicateDefaultStrategy: "cDriveFirstKeepNewest",
+    largeFileDefaultThresholdBytes: 500 * 1024 * 1024,
+    historyRetentionDays: 30,
+    desktopShortcutEnabled: false,
+    cDriveContextMenuEnabled: false,
+    scheduledScanReminderEnabled: false,
+  };
 }
 
 function DisabledSwitch({ label }: { label: string }) {

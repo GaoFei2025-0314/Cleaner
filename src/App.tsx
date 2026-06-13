@@ -121,10 +121,11 @@ export default function App() {
     setSelectedIds(nextIds);
   }
 
-  const hasBlockingCDriveWork =
-    step === "scan" ||
-    step === "clean" ||
-    (activeModule === "cDrive" && report !== null && step !== "result" && selectedIds.length > 0);
+  const hasBlockingWork = hasBlockingCDriveWork({
+    activeModule,
+    hasReport: report !== null,
+    step,
+  });
 
   const cDriveWorkflow = (
     <AppShell currentStep={stepIndex[step]} report={report}>
@@ -174,7 +175,7 @@ export default function App() {
   return (
     <SidebarShell
       activeModule={activeModule}
-      hasBlockingWork={hasBlockingCDriveWork}
+      hasBlockingWork={hasBlockingWork}
       onModuleChange={setActiveModule}
     >
       {activeModule === "cDrive" && cDriveWorkflow}
@@ -191,6 +192,18 @@ export default function App() {
       {activeModule === "settings" && <SettingsPage />}
     </SidebarShell>
   );
+}
+
+export function hasBlockingCDriveWork({
+  activeModule,
+  hasReport,
+  step,
+}: {
+  activeModule: CleanerModule;
+  hasReport: boolean;
+  step: Step;
+}): boolean {
+  return step === "scan" || step === "clean" || (activeModule === "cDrive" && hasReport && step !== "result");
 }
 
 function PlaceholderPage({ title }: { title: string }) {

@@ -23,14 +23,23 @@ export function HistoryPage() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [filter, setFilter] = useState<HistoryFilter>("duplicate");
   const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void listOperationHistory().then((entries) => {
-      if (cancelled) return;
-      setHistory(entries);
-      setLoading(false);
-    });
+    void listOperationHistory()
+      .then((entries) => {
+        if (cancelled) return;
+        setHistory(entries);
+        setStatus(null);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setHistory([]);
+        setStatus("清理历史加载失败，历史记录可能包含未脱敏内容");
+        setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -47,8 +56,13 @@ export function HistoryPage() {
   );
 
   async function clearHistory() {
-    await clearOperationHistory();
-    setHistory([]);
+    try {
+      await clearOperationHistory();
+      setHistory([]);
+      setStatus(null);
+    } catch {
+      setStatus("清空历史失败");
+    }
   }
 
   return (
@@ -81,6 +95,10 @@ export function HistoryPage() {
 
       {loading ? (
         <p className="tool-status">正在加载清理历史...</p>
+      ) : status ? (
+        <p className="empty-history" aria-live="polite">
+          {status}
+        </p>
       ) : filteredHistory.length === 0 ? (
         <p className="empty-history">暂无清理历史</p>
       ) : (
@@ -117,6 +135,7 @@ export function HistoryPage() {
 
 function formatDateTime(value: string): string {
   return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
