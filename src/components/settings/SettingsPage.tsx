@@ -7,7 +7,7 @@ const thresholdOptions = [
   { label: "100 MB", value: 100 * 1024 * 1024 },
   { label: "500 MB", value: 500 * 1024 * 1024 },
   { label: "1 GB", value: 1024 * 1024 * 1024 },
-  { label: "Custom", value: "custom" },
+  { label: "自定义", value: "custom" },
 ] as const;
 
 const duplicateStrategies: Array<{ label: string; value: DuplicateDefaultStrategy }> = [
