@@ -117,7 +117,11 @@ export function DuplicateCleanerPage() {
   }
 
   async function beginScan() {
-    const effectiveSettings = settings ?? defaultSettings();
+    if (!settings) {
+      setError("设置仍在加载中，请稍后再开始扫描。");
+      return;
+    }
+
     const request: DuplicateScanRequest = {
       selectedDrives,
       customFolders: [],
@@ -125,7 +129,7 @@ export function DuplicateCleanerPage() {
       customExtensions: [],
       includeSuspected,
       minSizeBytes: Math.max(1, Math.trunc(minSizeBytes)),
-      protectedPaths: effectiveSettings.protectedPaths,
+      protectedPaths: settings.protectedPaths,
     };
     operationIdRef.current = null;
     setError(null);
@@ -304,8 +308,8 @@ export function DuplicateCleanerPage() {
               onChange={(event) => setMinSizeBytes(Math.max(1, Math.trunc(Number(event.currentTarget.value) || 1)))}
             />
           </label>
-          <button className="primary-button" type="button" onClick={() => void beginScan()}>
-            开始扫描
+          <button className="primary-button" disabled={settings === null} type="button" onClick={() => void beginScan()}>
+            {settings === null ? "正在加载设置..." : "开始扫描"}
           </button>
         </section>
       )}

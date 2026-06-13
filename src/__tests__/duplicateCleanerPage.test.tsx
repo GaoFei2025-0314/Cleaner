@@ -126,13 +126,14 @@ const cleanupReport: DuplicateCleanupReport = {
 const apiMock = vi.hoisted(() => ({
   progressListener: undefined as ((payload: OperationProgressPayload) => void) | undefined,
   finishedListener: undefined as ((payload: OperationFinishedPayload) => void) | undefined,
+  getCleanerSettings: vi.fn(async () => settings),
   startDuplicateScan: vi.fn(async () => ({ operationId: "scan-op" })),
   startDuplicateCleanup: vi.fn(async () => ({ operationId: "clean-op" })),
 }));
 
 vi.mock("../services/v2Api", () => {
   return {
-    getCleanerSettings: vi.fn(async () => settings),
+    getCleanerSettings: apiMock.getCleanerSettings,
     startDuplicateScan: apiMock.startDuplicateScan,
     startDuplicateCleanup: apiMock.startDuplicateCleanup,
     cancelOperation: vi.fn(async () => true),
@@ -150,6 +151,7 @@ vi.mock("../services/v2Api", () => {
 beforeEach(() => {
   settings.defaultScanDrives = ["C:"];
   settings.duplicateDefaultStrategy = "cDriveFirstKeepNewest";
+  apiMock.getCleanerSettings.mockImplementation(async () => settings);
   apiMock.startDuplicateScan.mockImplementation(async () => ({ operationId: "scan-op" }));
   apiMock.startDuplicateCleanup.mockImplementation(async () => ({ operationId: "clean-op" }));
 });
@@ -161,6 +163,35 @@ afterEach(() => {
 });
 
 describe("DuplicateCleanerPage", () => {
+  it("waits for settings before enabling duplicate scans", async () => {
+    const settingsLoad = deferred<CleanerSettings>();
+    apiMock.getCleanerSettings.mockReturnValueOnce(settingsLoad.promise);
+    render(<DuplicateCleanerPage />);
+
+    const startButton = screen.getByRole("button", { name: /正在加载设置/ });
+    expect(startButton).toBeDisabled();
+
+    fireEvent.click(startButton);
+    expect(apiMock.startDuplicateScan).not.toHaveBeenCalled();
+
+    await act(async () => {
+      settingsLoad.resolve({
+        ...settings,
+        protectedPaths: ["C drive / Settings Protected"],
+      });
+      await settingsLoad.promise;
+    });
+
+    const enabledStartButton = await screen.findByRole("button", { name: /开始扫描/ });
+    expect(enabledStartButton).toBeEnabled();
+
+    fireEvent.click(enabledStartButton);
+
+    await waitFor(() => expect(apiMock.startDuplicateScan).toHaveBeenCalledWith(expect.objectContaining({
+      protectedPaths: ["C drive / Settings Protected"],
+    } satisfies Partial<DuplicateScanRequest>)));
+  });
+
   it("shows default duplicate scan settings without large-file threshold copy", async () => {
     render(<DuplicateCleanerPage />);
 
