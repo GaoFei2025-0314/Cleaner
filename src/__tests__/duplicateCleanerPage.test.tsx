@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CleanerSettings,
   DuplicateCleanupReport,
@@ -147,6 +147,13 @@ vi.mock("../services/v2Api", () => {
   };
 });
 
+beforeEach(() => {
+  settings.defaultScanDrives = ["C:"];
+  settings.duplicateDefaultStrategy = "cDriveFirstKeepNewest";
+  apiMock.startDuplicateScan.mockImplementation(async () => ({ operationId: "scan-op" }));
+  apiMock.startDuplicateCleanup.mockImplementation(async () => ({ operationId: "clean-op" }));
+});
+
 afterEach(() => {
   apiMock.progressListener = undefined;
   apiMock.finishedListener = undefined;
@@ -203,6 +210,74 @@ describe("DuplicateCleanerPage", () => {
     expect(screen.getByText("321")).toBeInTheDocument();
     expect(screen.getByText("发现重复组").parentElement).toHaveTextContent("4");
     expect(screen.getByText("发现文件").parentElement).toHaveTextContent("9");
+  });
+
+  it("ignores scan events until the start call returns the operation id", async () => {
+    const scanStart = deferred<{ operationId: string }>();
+    apiMock.startDuplicateScan.mockReturnValueOnce(scanStart.promise);
+    render(<DuplicateCleanerPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /开始扫描/ }));
+    await waitFor(() => expect(apiMock.startDuplicateScan).toHaveBeenCalled());
+    await waitFor(() => expect(apiMock.finishedListener).toBeDefined());
+
+    act(() => {
+      apiMock.progressListener?.({
+        operationId: "early-scan-op",
+        module: "duplicateScan",
+        stage: "错误的提前进度",
+        percent: 99,
+        currentLocationHint: "D drive / Early",
+        currentFileType: "document",
+        scannedFiles: 999,
+        foundGroups: 9,
+        foundItems: 9,
+        foundBytes: 9,
+        processedItems: 0,
+        successCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+      });
+      apiMock.finishedListener?.({
+        operationId: "early-scan-op",
+        module: "duplicateScan",
+        status: "failed",
+        result: null,
+        message: "提前失败事件",
+      });
+    });
+
+    expect(screen.queryByText("错误的提前进度")).not.toBeInTheDocument();
+    expect(screen.queryByText("提前失败事件")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /扫描结果/ })).not.toBeInTheDocument();
+
+    await act(async () => {
+      scanStart.resolve({ operationId: "scan-op" });
+      await scanStart.promise;
+    });
+
+    act(() => {
+      apiMock.finishedListener?.({
+        operationId: "scan-op",
+        module: "duplicateScan",
+        status: "completed",
+        result: report,
+        message: null,
+      });
+    });
+
+    expect(await screen.findByRole("heading", { name: /扫描结果/ })).toBeInTheDocument();
+  });
+
+  it("keeps C drive selected for duplicate scans even when settings default drives differ", async () => {
+    settings.defaultScanDrives = ["D:"];
+    render(<DuplicateCleanerPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /开始扫描/ }));
+
+    await waitFor(() => expect(apiMock.startDuplicateScan).toHaveBeenCalledWith(expect.objectContaining({
+      selectedDrives: ["C:"],
+    } satisfies Partial<DuplicateScanRequest>)));
   });
 
   it("separates strict and suspected duplicate results and does not show raw fingerprints", async () => {
@@ -309,6 +384,94 @@ describe("DuplicateCleanerPage", () => {
     expect(screen.getByText(/已跳过：2/)).toBeInTheDocument();
     expect(screen.getByText(/失败：3/)).toBeInTheDocument();
   });
+
+  it("sends selected and retained files for groups included in cleanup", async () => {
+    await renderResults();
+    fireEvent.click(screen.getByRole("button", { name: /展开疑似重复/ }));
+    fireEvent.click(screen.getByLabelText(/clip copy\.mov/));
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /我已确认/ }));
+    fireEvent.click(screen.getByRole("button", { name: /开始清理/ }));
+
+    await waitFor(() => expect(apiMock.startDuplicateCleanup).toHaveBeenCalled());
+    const cleanupCalls = apiMock.startDuplicateCleanup.mock.calls as unknown as [[DuplicateCleanupRequest]];
+    const request = cleanupCalls[0][0];
+
+    expect(request.groups).toEqual([
+      {
+        groupId: "strict-a",
+        files: [
+          { entryId: "strict-a-c", selected: false, protected: false },
+          { entryId: "strict-a-d", selected: true, protected: false },
+          { entryId: "strict-a-protected", selected: false, protected: true },
+        ],
+      },
+      {
+        groupId: "suspected-a",
+        files: [
+          { entryId: "suspected-a-1", selected: false, protected: false },
+          { entryId: "suspected-a-2", selected: true, protected: false },
+        ],
+      },
+    ]);
+  });
+
+  it("ignores cleanup events until the start call returns the operation id", async () => {
+    const cleanupStart = deferred<{ operationId: string }>();
+    apiMock.startDuplicateCleanup.mockReturnValueOnce(cleanupStart.promise);
+    await renderResults();
+    fireEvent.click(screen.getByRole("button", { name: /下一步/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /我已确认/ }));
+    fireEvent.click(screen.getByRole("button", { name: /开始清理/ }));
+    await waitFor(() => expect(apiMock.startDuplicateCleanup).toHaveBeenCalled());
+
+    act(() => {
+      apiMock.progressListener?.({
+        operationId: "early-clean-op",
+        module: "duplicateCleanup",
+        stage: "错误的提前清理进度",
+        percent: 88,
+        currentLocationHint: "D drive / Early",
+        currentFileType: "document",
+        scannedFiles: 0,
+        foundGroups: 0,
+        foundItems: 0,
+        foundBytes: 0,
+        processedItems: 88,
+        successCount: 0,
+        skippedCount: 0,
+        failedCount: 1,
+      });
+      apiMock.finishedListener?.({
+        operationId: "early-clean-op",
+        module: "duplicateCleanup",
+        status: "failed",
+        result: null,
+        message: "提前清理失败事件",
+      });
+    });
+
+    expect(screen.queryByText("错误的提前清理进度")).not.toBeInTheDocument();
+    expect(screen.queryByText("提前清理失败事件")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /清理完成/ })).not.toBeInTheDocument();
+
+    await act(async () => {
+      cleanupStart.resolve({ operationId: "clean-op" });
+      await cleanupStart.promise;
+    });
+
+    act(() => {
+      apiMock.finishedListener?.({
+        operationId: "clean-op",
+        module: "duplicateCleanup",
+        status: "completed",
+        result: cleanupReport,
+        message: null,
+      });
+    });
+
+    expect(await screen.findByRole("heading", { name: /清理完成/ })).toBeInTheDocument();
+  });
 });
 
 async function renderResults() {
@@ -325,4 +488,14 @@ async function renderResults() {
     });
   });
   await screen.findByRole("heading", { name: /扫描结果/ });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }

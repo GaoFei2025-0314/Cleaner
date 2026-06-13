@@ -79,7 +79,6 @@ export function DuplicateCleanerPage() {
       .then((nextSettings) => {
         if (disposed) return;
         setSettings(nextSettings);
-        setSelectedDrives(nextSettings.defaultScanDrives.length ? nextSettings.defaultScanDrives : ["C:"]);
         setStrategy(nextSettings.duplicateDefaultStrategy);
       })
       .catch(() => {
@@ -134,11 +133,11 @@ export function DuplicateCleanerPage() {
     setStep("scanning");
 
     const unsubscribeProgress = await onCleanerOperationProgress((payload) => {
-      if (payload.module !== "duplicateScan" || (operationIdRef.current && payload.operationId !== operationIdRef.current)) return;
+      if (payload.module !== "duplicateScan" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
       setProgress(payload);
     });
     const unsubscribeFinished = await onCleanerOperationFinished((payload) => {
-      if (payload.module !== "duplicateScan" || (operationIdRef.current && payload.operationId !== operationIdRef.current)) return;
+      if (payload.module !== "duplicateScan" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
       void unsubscribeProgress();
       void unsubscribeFinished();
       handleScanFinished(payload as OperationFinishedPayload<DuplicateScanReport>);
@@ -177,11 +176,11 @@ export function DuplicateCleanerPage() {
     setStep("cleaning");
 
     const unsubscribeProgress = await onCleanerOperationProgress((payload) => {
-      if (payload.module !== "duplicateCleanup" || (operationIdRef.current && payload.operationId !== operationIdRef.current)) return;
+      if (payload.module !== "duplicateCleanup" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
       setProgress(payload);
     });
     const unsubscribeFinished = await onCleanerOperationFinished((payload) => {
-      if (payload.module !== "duplicateCleanup" || (operationIdRef.current && payload.operationId !== operationIdRef.current)) return;
+      if (payload.module !== "duplicateCleanup" || !operationIdRef.current || payload.operationId !== operationIdRef.current) return;
       void unsubscribeProgress();
       void unsubscribeFinished();
       handleCleanupFinished(payload as OperationFinishedPayload<DuplicateCleanupReport>);
@@ -618,11 +617,13 @@ function buildCleanupRequest(report: DuplicateScanReport, selectedIds: Set<strin
     groups: [...report.strictGroups, ...report.suspectedGroups]
       .map((group) => ({
         groupId: group.groupId,
-        files: group.files
-          .filter((file) => selectedIds.has(file.entryId) && !file.protected)
-          .map((file) => ({ entryId: file.entryId, selected: true, protected: file.protected })),
+        files: group.files.map((file) => ({
+          entryId: file.entryId,
+          selected: selectedIds.has(file.entryId) && !file.protected,
+          protected: file.protected,
+        })),
       }))
-      .filter((group) => group.files.length > 0),
+      .filter((group) => group.files.some((file) => file.selected)),
   };
 }
 
